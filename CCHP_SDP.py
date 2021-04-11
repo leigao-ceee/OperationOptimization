@@ -1,231 +1,318 @@
 #!/usr/bin/env python
-# @Time    : 4/6/2021 15:45
+# @Time    : 4/11/2021 16:15
 # @Author  : Lei Gao
 # @Email    : leigao@umd.edu
-# 2 stages
-from pyomo.environ import *
-from pyomo.opt import SolverFactory
-import pandas as pd
 
+from pyomo.environ import *
+import pandas as pd
+import numpy as np
+import itertools
+import time
+
+
+# demands into dataframe
 path = r'D:\Lei\work\CombinedSystemOperation\CCHPmodel_ceee_office\cchp_data.xlsx'
 df_HD = pd.read_excel(path, sheet_name='heating_demand', header=0, index_col=0)
 df_ED = pd.read_excel(path, sheet_name='electricity_demand', header=0, index_col=0)
 df_EP = pd.read_excel(path, sheet_name='electricity_price', header=0, index_col=0)
 df_Temp = pd.read_excel(path, sheet_name='temperature', header=0, index_col=0)
 df_Sc = pd.read_excel(path, sheet_name='possibility', header=0, index_col=0)
-
-# set declaration
-# subsystems index
-model = ConcreteModel()
-model.SbSy = Set(initialize=['PM', 'ORC', 'Gr', 'ABH', 'EH', 'Bo'])  # all subsystems
-model.SSEl = Set(initialize=['PM', 'ORC'])  # electricity subsystems
-model.SSHt = Set(initialize=['ABH', 'EH', 'Bo'])  # heating subsystems
-model.SSFl = Set(initialize=['PM', 'Bo'])  # fuel consumption subsystems
-model.SSWH = Set(initialize=['ORC', 'ABH'])  # waste heat consumption subsystems
-# scenario and stage number
-model.sc = Param(initialize=11)
-model.st = Param(initialize=12)
-model.Scen = RangeSet(1, model.sc)
-model.Stag = RangeSet(7, model.st)  # stage number
-
-# parameter declaration
-# capacity
-model.CpEl = Param(model.SSEl, initialize={'PM': 6.0, 'ORC': 2.5})  # capacity of electricity subsystem
-model.CpHt = Param(model.SSHt, initialize={'ABH': 7, 'EH': 7, 'Bo': 7})  # capacity of heating subsystem
-model.CtFl = Param(initialize=1.1763e-5)  # fuel unit price ($/kJ)
-# demand, probability and temperature initialization
-model.DeHt = Param(model.Stag, model.Scen, initialize=0, mutable=True)
-model.DeEl = Param(model.Stag, initialize=0, mutable=True)
-model.CtEl = Param(model.Stag, initialize=0, mutable=True)
-model.Temp = Param(model.Stag, model.Scen, initialize=0, mutable=True)
-model.Poss = Param(model.Scen, initialize=0, mutable=True)
-for i in model.Stag:
-    model.DeEl[i] = df_ED[1][i]
-    model.CtEl[i] = df_EP[1][i]
-    for j in model.Scen:
-        model.DeHt[i, j] = df_HD[j][i]
-        model.Temp[i, j] = df_Temp[j][i]
-        model.Poss[j] = df_Sc[j][1]
+df_StHt = pd.read_excel(path, sheet_name='storage_heating', header=0, index_col=0)
+df_StEl = pd.read_excel(path, sheet_name='storage_electricity', header=0, index_col=0)
 
 
-# create a block for stage related constraints
-def Stag_block(b, t):
-    # variable declaration
-    # binary variables: on-off signal
-    b.ApEl = Var(model.SSEl, within=Binary, initialize=1)
-    b.ApHt = Var(model.SSHt, within=Binary, initialize=1)
+def subprob(t, i, j, s, ii, jj, cost):
+    # MODEL CONSTRUCTION
+    model = ConcreteModel()
+
+    # SET DECLARATION
+    # ## subsystems index
+    model.SbSy = Set(initialize=['PM', 'ORC', 'Gr', 'ABH', 'EH', 'Bo'])
+    model.SSEl = Set(initialize=['PM', 'ORC'])
+    model.SSHt = Set(initialize=['ABH', 'EH', 'Bo'])
+    model.SSFl = Set(initialize=['PM', 'Bo'])
+    model.SSWH = Set(initialize=['ORC', 'ABH'])
+    model.SSSt = Set(initialize=['El', 'Ht'])
+
+    # PARAMETER DECLARATION
+    # ## capacity
+    model.CpEl = Param(model.SSEl, initialize={'PM': 6.0,
+                                               'ORC': 2.5})
+    model.CpHt = Param(model.SSHt, initialize={'ABH': 5,
+                                               'EH': 5,
+                                               'Bo': 5})
+    model.CpSt = Param(model.SSSt, initialize={'El': 5,
+                                               'Ht': 5})
+    # ## demand, probability and temperature
+    model.DeHt = Param(initialize=0, mutable=True)
+    model.DeEl = Param(initialize=0, mutable=True)
+    model.CtEl = Param(initialize=0, mutable=True)
+    model.Temp = Param(initialize=0, mutable=True)
+    model.Poss = Param(initialize=0, mutable=True)
+    # fuel unit price ($/kJ)
+    model.CtFl = Param(initialize=1.1763e-5)
+    # ## assign values
+    model.Poss = df_Sc[s][1]
+    model.DeHt = df_HD[s][t]
+    model.DeEl = df_ED[1][t]
+    model.CtEl = df_EP[1][t]
+    model.Temp = df_Temp[s][t]
+
+    # VARIABLES DECLARATION
     # positive variables: partial load signal
-    b.BtEl = Var(model.SSEl, model.Scen, within=NonNegativeReals, bounds=(0, 1), initialize=0)
-    b.BtHt = Var(model.SSHt, model.Scen, within=NonNegativeReals, bounds=(0, 1), initialize=0)
+    nnr = NonNegativeReals
+    model.ApEl = Var(model.SSEl, within=Binary, initialize=1)
+    model.ApHt = Var(model.SSHt, within=Binary, initialize=1)
+    model.BtEl = Var(model.SSEl, bounds=(0.1, 1), initialize=0)  # 2
+    model.BtHt = Var(model.SSHt, bounds=(0.1, 1), initialize=0)  # 3
     # energy input and output
-    b.StSE = Var(model.Scen, within=NonNegativeReals, bounds=(0, 2), initialize=0)
-    b.StSH = Var(model.Scen, within=NonNegativeReals, bounds=(0, 2), initialize=0)
-    b.Elec = Var(model.SSEl, model.Scen, within=NonNegativeReals)  # electricity generated by electricity subsystems
-    b.Heat = Var(model.SSHt, model.Scen, within=NonNegativeReals)  # heat generated by heating subsystems
-    b.ElGd = Var(model.Scen, within=NonNegativeReals)  # electricity purchased from grid for electricity demand
-    b.ElEH = Var(model.Scen, within=NonNegativeReals)  # electricity purchased from grid for vapor compression heat pump
+    model.Elec = Var(model.SSEl, within=nnr, initialize=0)  # electricity generated subsystems #2
+    model.Heat = Var(model.SSHt, within=nnr, initialize=0)  # heat generated by subsystems #3
+    model.ElGd = Var(within=nnr, initialize=0)  # from grid for electricity demand #1*sc
+    model.ElEH = Var(within=nnr, initialize=0)  # from grid for vapor compression heat pump #1*sc
     # heat recovery from waste heat
-    b.HtWH = Var(model.SSWH, model.Scen, within=NonNegativeReals)  # waste heat absorbed by waste heat driven components
+    model.HtWH = Var(model.SSWH, within=nnr, initialize=0)  # waste heat absorbed by subsys #2*sc
     # fuel related
-    b.Fuel = Var(model.SSFl, model.Scen, within=NonNegativeReals)  # fuel consumption of boiler or PM
-    b.FlTt = Var(model.Scen, within=NonNegativeReals)  # total fuel consumption
+    model.Fuel = Var(model.SSFl, within=nnr, initialize=0)  # fuel for boiler or PM #2*sc
+    model.FlTt = Var(within=nnr, initialize=0)  # total fuel consumption #1*sc
     # subsystem efficiency
-    b.EfSS = Var(model.SbSy, model.Scen)  # efficiency of each subsystems
-    b.EfWH = Var(model.Scen)  # efficiency of waste heat
+    #    model.EfSS = Var(model.SbSy, bounds=(0, 5), initialize=0)  # efficiency of each subsystems #5*sc
+    #    model.EfWH = Var(bounds=(0, 1), initialize=0)  # efficiency of waste heat #1*sc
+    # additional variable
+    # model.zEl = Var(model.SSEl, within=nnr, initialize=0)
+    # model.zHt = Var(model.SSHt, within=nnr, initialize=0)
+    model.zEl = Var(model.SSEl, bounds=(0, 1), initialize=0)
+    model.zHt = Var(model.SSHt, bounds=(0, 1), initialize=0)
 
-    # constraints of energy balance
-    def Elec_output_rule(b, SSEl, Scen):
-        return b.ApEl[SSEl] * b.BtEl[SSEl, Scen] * model.CpEl[SSEl] == b.Elec[SSEl, Scen]
-    def Heat_output_rule(b, SSHt, Scen):
-        return b.ApHt[SSHt] * b.BtHt[SSHt, Scen] * model.CpHt[SSHt] == b.Heat[SSHt, Scen]
-    def HtCons_ORC_rule(b, Scen):
-        return b.HtWH['ORC', Scen] * b.EfSS['ORC', Scen] == b.Elec['ORC', Scen]
-    def HtCons_ABH_rule(b, Scen):
-        return b.HtWH['ABH', Scen] * b.EfSS['ABH', Scen] == b.Heat['ABH', Scen]
-    def HtCons_EH_rule(b, Scen):
-        return b.ElEH[Scen] * b.EfSS['EH', Scen] == b.Heat['EH', Scen]
-    def FlCons_PM_rule(b, Scen):
-        return b.Fuel['PM', Scen] * b.EfSS['PM', Scen] == b.Elec['PM', Scen]
-    def FlCons_Bo_rule(b, Scen):
-        return b.Fuel['Bo', Scen] * b.EfSS['Bo', Scen] == b.Heat['Bo', Scen]
-    def WHGene_PM_rule(b, Scen):
-        return b.Fuel['PM', Scen] * b.EfWH[Scen] >= sum(b.HtWH[SSWH, Scen] for SSWH in model.SSWH)  # loss constraint
-    def Flcons_Tt_rule(b, Scen):
-        return sum(b.Fuel[SSFl, Scen] for SSFl in model.SSFl) * 3600 == b.FlTt[Scen]
-    b.Elec_output_st = Constraint(model.SSEl, model.Scen, rule=Elec_output_rule)
-    b.Heat_output_st = Constraint(model.SSHt, model.Scen, rule=Heat_output_rule)
-    b.HtCons_ORC_st = Constraint(model.Scen, rule=HtCons_ORC_rule)
-    b.HtCons_ABH_st = Constraint(model.Scen, rule=HtCons_ABH_rule)
-    b.HtCons_EH_st = Constraint(model.Scen, rule=HtCons_EH_rule)
-    b.FlCons_PM_st = Constraint(model.Scen, rule=FlCons_PM_rule)
-    b.FlCons_Bo_st = Constraint(model.Scen, rule=FlCons_Bo_rule)
-    b.WHGene_PM_st = Constraint(model.Scen, rule=WHGene_PM_rule)
-    b.Flcons_Tt_st = Constraint(model.Scen, rule=Flcons_Tt_rule)
+    # VARIABLES DECLARATION
+    # energy balance of prime mover
+    def _pm(m):
+        return m.zEl['PM'] * m.CpEl['PM'] == m.Fuel['PM'] * (-0.001357 * m.Temp + 0.161708)
+
+    model.pm_st = Constraint(rule=_pm)
+
+    # energy balance of absorption heat pump
+    def _abh(m):
+        return m.zHt['ABH'] * m.CpHt['ABH'] == m.HtWH['ABH'] * (
+                1.45 + 0.007737 * m.Temp - 0.04782 * m.BtHt['ABH'] - 0.0002651 * m.Temp ** 2 + 0.006368 * m.Temp * m.BtHt['ABH'])
+
+    model.abh_st = Constraint(rule=_abh)
+
+    # energy balance of ORC
+    def _orc(m):
+        return m.zEl['ORC'] * m.CpEl['ORC'] == m.HtWH['ORC'] * (-0.001357 * m.Temp + 0.161708)
+
+    model.orc_st = Constraint(rule=_orc)
+
+    # energy balance of electric heat pump
+    def _eh(m):
+        return m.zHt['EH'] * m.CpHt['EH'] == m.ElEH * (
+                    3.142 + 0.1087 * m.Temp + 0.1208 * m.BtHt['EH'] + 0.001161 * m.Temp ** 2
+                    - 0.03463 * m.Temp * m.BtHt['EH'])
+
+    model.eh_st = Constraint(rule=_eh)
+
+    # energy balance of boiler
+    def _bo(m):
+        return m.zHt['Bo'] * m.CpHt['Bo'] == m.Fuel['Bo'] * (1.572 * m.BtHt['Bo'] / (0.1745 + 1.744 * m.BtHt['Bo']))
+
+    model.bo_st = Constraint(rule=_bo)
+
+    # waste heat generated by PM #1*sc
+    def _rh(m):
+        return m.Fuel['PM'] * (0.0474 - 0.000303 * m.Temp + 0.3866 * m.BtEl['PM'] - 2.8e-6 * m.Temp ** 2
+                               + 0.0001041 * m.Temp * m.BtEl['PM'] - 0.2182 * m.BtEl['PM'] ** 2) >= sum(
+            m.HtWH[SSWH] for SSWH in m.SSWH)  # loss constraint
+
+    model.rh_st = Constraint(rule=_rh)
 
     # constraints of subsystems efficiency
-    def Effi_Bo_rule(b, Scen):
-        # return 1.572*b.BtHt['Boiler', Scen]/(0.1745+1.744*b.BtHt['Boiler', Scen]) == b.EfSS['Boiler', Scen]
-        return b.BtHt['Bo', Scen] == 0.85
-    def Effi_ORC_rule(b, Scen):
-        return -0.001357 * model.Temp[t, Scen] + 0.161708 == b.EfSS['ORC', Scen]
-    def Effi_ABH_rule(b, Scen):
-        return 1.45 + 0.007737 * model.Temp[t, Scen] - 0.04782 * b.BtHt['ABH', Scen] - 0.0002651 * model.Temp[
-            t, Scen] ** 2 + 0.006368 * model.Temp[t, Scen] * b.BtHt['ABH', Scen] == b.EfSS['ABH', Scen]
-    def Effi_EH_rule(b, Scen):
-        return 3.142 + 0.1087 * model.Temp[t, Scen] + 0.1208 * b.BtHt['EH', Scen] + 0.001161 * model.Temp[
-            t, Scen] ** 2 - 0.03463 * model.Temp[t, Scen] * b.BtHt['EH', Scen] == b.EfSS['EH', Scen]
-    def Effi_PM_rule(b, Scen):
-        return 0.0474 - 0.000303 * model.Temp[t, Scen] + 0.3866 * b.BtEl['PM', Scen] - 2.8e-6 * model.Temp[
-            t, Scen] ** 2 + 0.0001041 * model.Temp[t, Scen] * b.BtEl['PM', Scen] - 0.2182 * b.BtEl['PM', Scen] ** 2 == \
-               b.EfSS['PM', Scen]
-    def Effi_WH_rule(b, Scen):
-        return 0.8952 - 0.0002987 * model.Temp[t, Scen] - 0.7999 * b.BtEl['PM', Scen] + 1.568e-5 * model.Temp[
-            t, Scen] ** 2 + 0.0003575 * model.Temp[t, Scen] * b.BtEl['PM', Scen] + 0.4239 * b.BtEl['PM', Scen] ** 2 == \
-               b.EfWH[Scen]
-    b.Effi_Bo_st = Constraint(model.Scen, rule=Effi_Bo_rule)
-    b.Effi_ORC_st = Constraint(model.Scen, rule=Effi_ORC_rule)
-    b.Effi_ABH_st = Constraint(model.Scen, rule=Effi_ABH_rule)
-    b.Effi_EH_st = Constraint(model.Scen, rule=Effi_EH_rule)
-    b.Effi_PM_st = Constraint(model.Scen, rule=Effi_PM_rule)
-    b.Effi_WH_st = Constraint(model.Scen, rule=Effi_WH_rule)
+    # boiler efficiency #1*sc
+    """
+    def _eta_bo(m):
+        return 0.9 == m.EfSS['Bo']
+    model.eta_bo_st = Constraint(rule=_eta_bo)
+
+    # ORC efficiency #1*sc
+    def _eta_orc(m):
+        return 0.3 == m.EfSS['ORC']
+    model.eta_orc_st = Constraint(rule=_eta_orc)
+
+    # ABH efficiency #1*sc
+    def _eta_abh(m):
+        return 0.8 == m.EfSS['ABH']
+    model.eta_abh_st = Constraint(rule=_eta_abh)
+
+    # EH efficiency #1*sc
+    def _eta_eh(m):
+        return 4.0 == m.EfSS['EH']
+    model.eta_eh_st = Constraint(rule=_eta_eh)
+
+    # PM efficiency #1*sc
+    def _eta_pm(m):
+        return 0.3 == m.EfSS['PM']
+    model.eta_pm_st = Constraint(rule=_eta_pm)
+
+    # WH efficiency #1*sc
+    def _eta_rh(m):
+        return 0.5 == m.EfWH
+    model.eta_rh_st = Constraint(rule=_eta_rh)
+    """
+
+    # constraints of energy demand
+    # heating demand #1*sc*Stag
+    def _dm_ht(m):
+        return sum(m.zHt[SSHt] * m.CpHt[SSHt] for SSHt in m.SSHt) \
+               + (df_StHt[1][i] - df_StHt[1][ii]) * m.CpSt['Ht'] >= m.DeHt
+
+    model.dm_ht_st = Constraint(rule=_dm_ht)
+
+    # electricity demand #1*sc*Stag
+    def _dm_el(m):
+        return sum(m.zEl[SSEl] * m.CpEl[SSEl] for SSEl in m.SSEl) \
+               + m.ElGd + (df_StEl[1][j] - df_StEl[1][jj]) * m.CpSt['El'] >= m.DeEl
+
+    model.dm_el_st = Constraint(rule=_dm_el)
+
+    # constraints of additional variable z (heating)
+    def _zht_1(m, ht):
+        return m.zHt[ht] >= m.ApHt[ht] * 0.1
+
+    model.zht_1_st = Constraint(model.SSHt, rule=_zht_1)
+
+    def _zht_2(m, ht):
+        return m.zHt[ht] <= m.ApHt[ht] * 1
+
+    model.zht_2_st = Constraint(model.SSHt, rule=_zht_2)
+
+    def _zht_3(m, ht):
+        return m.zHt[ht] >= m.BtHt[ht] - (1 - m.ApHt[ht]) * 1
+
+    model.zht_3_st = Constraint(model.SSHt, rule=_zht_3)
+
+    def _zht_4(m, ht):
+        return m.zHt[ht] <= m.BtHt[ht] - (1 - m.ApHt[ht]) * 0.1
+
+    model.zht_4_st = Constraint(model.SSHt, rule=_zht_4)
+
+    def _zht_5(m, ht):
+        return m.zHt[ht] <= m.BtHt[ht] + (1 - m.ApHt[ht]) * 1
+
+    model.zht_5_st = Constraint(model.SSHt, rule=_zht_5)
+
+    # constraints of additional variable z (electricity)
+    def _zel_1(m, el):
+        return m.zEl[el] >= m.ApEl[el] * 0.1
+
+    model.zel_1_st = Constraint(model.SSEl, rule=_zel_1)
+
+    def _zel_2(m, el):
+        return m.zEl[el] <= m.ApEl[el] * 1
+
+    model.zel_2_st = Constraint(model.SSEl, rule=_zel_2)
+
+    def _zel_3(m, el):
+        return m.zEl[el] >= m.BtEl[el] - (1 - m.ApEl[el]) * 1
+
+    model.zel_3_st = Constraint(model.SSEl, rule=_zel_3)
+
+    def _zel_4(m, el):
+        return m.zEl[el] <= m.BtEl[el] - (1 - m.ApEl[el]) * 0.1
+
+    model.zel_4_st = Constraint(model.SSEl, rule=_zel_4)
+
+    def _zel_5(m, el):
+        return m.zEl[el] <= m.BtEl[el] + (1 - m.ApEl[el]) * 1
+
+    model.zel_5_st = Constraint(model.SSEl, rule=_zel_5)
+
+    # OBJECTIVE DECLARATION
+    def _obj(m):
+        # return m.CtFl*sum(m.Fuel[SSFl] for SSFl in m.SSFl)*3600 + m.CtEl * (m.ElGd + m.ElEH) + cost
+        return m.CtFl * sum(m.Fuel[SSFl] for SSFl in m.SSFl) * 3600 + m.CtEl * (m.ElGd + m.ElEH) + cost
+
+    model.obj = Objective(rule=_obj, sense=minimize)
+
+    return model
 
 
-# constraints of energy demand
-# heating demand
-def dema_Ht_link(m, Scen, t):
-    if t == m.Stag.first():
-        return sum(m.block[t].Heat[SSHt, Scen] for SSHt in model.SSHt) + \
-               0 - m.block[t].StSH[Scen] >= model.DeHt[t, Scen]
-    else:
-        return sum(m.block[t].Heat[SSHt, Scen] for SSHt in model.SSHt) + \
-               m.block[t - 1].StSH[Scen] - m.block[t].StSH[Scen] >= model.DeHt[t, Scen]
 
-
-# electricity demand
-def dema_El_link(m, Scen, t):
-    if t == m.Stag.first():
-        return sum(m.block[t].Elec[SSEl, Scen] for SSEl in model.SSEl) + \
-               m.block[t].ElGd[Scen] + 0 - m.block[t].StSE[Scen] >= model.DeEl[t]
-    else:
-        return sum(m.block[t].Elec[SSEl, Scen] for SSEl in model.SSEl) + \
-               m.block[t].ElGd[Scen] + m.block[t - 1].StSE[Scen] - m.block[t].StSE[Scen] >= model.DeEl[t]
-
-
-model.block = Block(model.Stag, rule=Stag_block)
-model.dema_Ht_st = Constraint(model.Scen, model.Stag, rule=dema_Ht_link)
-model.dema_El_st = Constraint(model.Scen, model.Stag, rule=dema_El_link)
-
-
-# objective
-def objective_rule(model):
-    return sum(model.Poss[Scen] * (model.CtFl * model.block[t].FlTt[Scen] + model.CtEl[t] * (
-            model.block[t].ElGd[Scen] + model.block[t].ElEH[Scen])) for Scen in model.Scen for t in model.Stag)
-
-
-model.obj = Objective(rule=objective_rule)
-
-# %%
-
-# opt = SolverFactory('couenne')
-# solver_manager = SolverManagerFactory('neos')
-# import time
-#
-# start = time.time()
-# result = solver_manager.solve(model, opt=opt, tee=True)
-# end = time.time()
-# runtime = end - start
-# print(runtime)
-# model.display()
-
-# solver_manager = SolverManagerFactory('neos')
-solver = 'ipopt'  # ipopt; bonmin; couenne; gurobi
-# solver_io = 'neos'
-stream_solver = True  # True prints solver output to screen
+"""
+solver_manager = SolverManagerFactory('neos')
+opt = SolverFactory('cbc')
+# available NLP solvers from neos: knitro; conopt; l-bfgs-b; lancelot; loqo; mosek; snopt
+"""
+solver = "scip"
+solver_io = "nl"
+opt = SolverFactory(solver, solver_io=solver_io)
+# opt.options['expect_infeasible_problem'] = 'no'
+"""
+opt.options['acceptable_tol'] = 0.001
+opt.options['ms_enable'] = 1
+opt.options['ms_maxsolves'] = 0
+opt.options['par_numthreads'] = 12
+opt.options['ms_savetol'] = 0.0001
+opt.options['ms_num_to_save'] = 3
+opt.options['ms_maxtime_cpu'] = 600
+"""
+stream_solver = False  # True prints solver output to screen
 keepfiles = False  # True prints intermediate file names (.nl,.sol,...)
-# opt = SolverFactory(solver, solver_io=solver_io)
-opt = SolverFactory(solver)
-# solver_manager = SolverManagerFactory('neos')
-## Send the model to ipopt and collect the solution
-print("INITIAL SOLVE")
-# results including any values for previously declared IMPORT /
-# IMPORT_EXPORT Suffix components will be automatically loaded into the
-# model
-results = opt.solve(model, keepfiles=keepfiles, tee=stream_solver)
-###
-model.display()
 
-"""
-### Declare all suffixes 
-# Ipopt bound multipliers (obtained from solution)
-model.ipopt_zL_out = Suffix(direction=Suffix.IMPORT)
-model.ipopt_zU_out = Suffix(direction=Suffix.IMPORT)
-# Ipopt bound multipliers (sent to solver)
-model.ipopt_zL_in = Suffix(direction=Suffix.EXPORT)
-model.ipopt_zU_in = Suffix(direction=Suffix.EXPORT)
-# Obtain dual solutions from first solve and send to warm start
-model.dual = Suffix(direction=Suffix.IMPORT_EXPORT)
-###
+# stor_ht = range(1, df_StHt.size+1)
+# stor_el = range(1, df_StEl.size+1)
+# scen = range(1, df_Sc.size+1)
+f = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_st_ht = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_st_el = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_al_pm = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_bt_pm = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_al_orc = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_bt_orc = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_al_abh = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_bt_abh = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_al_bo = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_bt_bo = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_al_eh = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cache_bt_eh = np.zeros([len(df_HD) + 1, df_StHt.size + 1, df_StEl.size + 1, df_Sc.size + 1])
+cost = np.zeros([len(df_HD) + 2, df_StHt.size + 1, df_StEl.size + 1])
 
-### Set Ipopt options for warm-start
-# The current values on the ipopt_zU_out and
-# ipopt_zL_out suffixes will be used as initial 
-# conditions for the bound multipliers to solve
-# the new problem
-model.ipopt_zL_in.update(model.ipopt_zL_out)
-model.ipopt_zU_in.update(model.ipopt_zU_out)
-opt.options['warm_start_init_point'] = 'yes'
-opt.options['warm_start_bound_push'] = 1e-6
-opt.options['warm_start_mult_bound_push'] = 1e-6
-opt.options['mu_init'] = 1e-6
-#opt.options['max_iter'] =6000
-###
+# for t in range(len(df_HD), 0, -1):
+for t in range(24, 0, -1):
+    print('Solve the ' + str(t) + ' stage problem')
+    for i, j in itertools.product(range(1, df_StHt.size + 1), range(1, df_StEl.size + 1)):
+        print('    Solve the state combination of heating storage: ' + str(
+            df_StHt[1][i]) + ' and electricity storage: ' + str(df_StEl[1][j]))
+        start = time.time()
+        for s in range(1, df_Sc.size + 1):
+            z = 999999
+            # SAVE DATA
+            for ii, jj in itertools.product(range(1, df_StHt.size + 1), range(1, df_StEl.size + 1)):
+                m = subprob(t, i, j, s, ii, jj, cost[t + 1, ii, jj])
+                results = opt.solve(m, keepfiles=keepfiles, tee=stream_solver)
+                # results = solver_manager.solve(m,opt=opt, tee=True)
+                obj = value(m.obj)
+                # SAVE DATA
+                if obj < z:
+                    z = obj
+                    f[t, i, j, s] = z
+                    cache_st_ht[t, i, j, s] = df_StHt[1][ii]
+                    cache_st_el[t, i, j, s] = df_StEl[1][jj]
+                    cache_al_pm[t, i, j, s] = value(m.ApEl['PM'])
+                    cache_bt_pm[t, i, j, s] = value(m.BtEl['PM'])
+                    cache_al_orc[t, i, j, s] = value(m.ApEl['ORC'])
+                    cache_bt_orc[t, i, j, s] = value(m.BtEl['ORC'])
+                    cache_al_abh[t, i, j, s] = value(m.ApHt['ABH'])
+                    cache_bt_abh[t, i, j, s] = value(m.BtHt['ABH'])
+                    cache_al_bo[t, i, j, s] = value(m.ApHt['Bo'])
+                    cache_bt_bo[t, i, j, s] = value(m.BtHt['Bo'])
+                    cache_al_eh[t, i, j, s] = value(m.ApHt['EH'])
+                    cache_bt_eh[t, i, j, s] = value(m.BtHt['EH'])
 
-### Send the model and suffix information to ipopt and collect the solution
-print("") 
-print("WARM-STARTED SOLVE")
-# The solver plugin will scan the model for all active suffixes
-# valid for importing, which it will load into the model
-results = opt.solve(model,keepfiles=keepfiles,tee=stream_solver)
-model.display()
-###
-"""
+            print('        The best combination under scen ' + str(s) + ' is StHt: ' + str(
+                cache_st_ht[t, i, j, s]) + ' and StEl: ' + str(cache_st_el[t, i, j, s]))
+
+        cost[t, i, j] = sum(df_Sc[s][1] * f[t, i, j, s] for s in range(1, df_Sc.size + 1))
+        print('    The total cost is: ' + str(cost[t, i, j]))
+        end = time.time()
+        usedtime = end - start
+        print('    Used time is: ' + str(usedtime))
