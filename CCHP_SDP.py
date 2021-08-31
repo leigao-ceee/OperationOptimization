@@ -97,20 +97,20 @@ class CCHP_Model(object):
     def add_subsystem(self, subsystem=None):
         if not subsystem:
             self.f2e.append(ThermalSystem(name='turbine', idx=0, capacity=5., ramp=[0.2, 1.],
-                                          pdata=[0, 0, 0, 0, -0.001357, 0.161708],
-                                          qdata=[0, 0, 0, 0, -0.001357, 0.161708]))
+                                          pdata=[0.1283, -0.6592, 0.7945, 0.003],
+                                          qdata=[-0.7098, 1.5206, -1.1191, 0.835]))
             self.h2e.append(ThermalSystem(name='rankine', idx=0, capacity=5., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
+                                          pdata=[0, 0, 0, 0.15]))
             self.f2h.append(ThermalSystem(name='boiler', idx=0, capacity=5., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
+                                          pdata=[0, 0, 0, 0.95]))
             # self.h2h.append(ThermalSystem(name='absorb', idx=0, capacity=5., ramp=[0.1, 1.],
             #                               pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
             self.e2h.append(ThermalSystem(name='heater', idx=0, capacity=5., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
+                                          pdata=[0, 0, 0, 0.95]))
             self.h2c.append(ThermalSystem(name='absorb', idx=0, capacity=5., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
+                                          pdata=[0, -0.6181, 0.8669, 0.4724]))
             self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=5., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
+                                          pdata=[0, 0, 0, 3.0]))
             self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=5., ramp=2,
                                           pdata=[0, 0]))
             self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=5., ramp=2,
@@ -201,14 +201,18 @@ class CCHP_Model(object):
 
     def create_model(self):
         def _efficiency(model, subsystem):
-            return model.M[subsystem] == (model.para_eff[subsystem, 0] * model.beta[subsystem] ** 2 +
-                                          model.para_eff[subsystem, 1] * model.para_T ** 2 +
-                                          model.para_eff[subsystem, 2] * model.beta[subsystem] * model.para_T +
-                                          model.para_eff[subsystem, 3] * model.beta[subsystem] +
-                                          model.para_eff[subsystem, 4] * model.para_T +
-                                          model.para_eff[subsystem, 5]) * model.energy_in[subsystem] / \
+            # return model.M[subsystem] == (model.para_eff[subsystem, 0] * model.beta[subsystem] ** 2 +
+            #                               model.para_eff[subsystem, 1] * model.para_T ** 2 +
+            #                               model.para_eff[subsystem, 2] * model.beta[subsystem] * model.para_T +
+            #                               model.para_eff[subsystem, 3] * model.beta[subsystem] +
+            #                               model.para_eff[subsystem, 4] * model.para_T +
+            #                               model.para_eff[subsystem, 5]) * model.energy_in[subsystem] / \
+            #        model.para_cp[subsystem]
+            return model.M[subsystem] == (model.para_eff[subsystem, 0] * model.beta[subsystem] ** 3 +
+                                          model.para_eff[subsystem, 1] * model.beta[subsystem] ** 2 +
+                                          model.para_eff[subsystem, 2] * model.beta[subsystem] +
+                                          model.para_eff[subsystem, 3]) * model.energy_in[subsystem] / \
                    model.para_cp[subsystem]
-
         # def _efficiency_strg(model, subsystem):
         #     return model.eff[subsystem] == (model.para_eff_strg[subsystem, 0] * model.beta[subsystem] +
         #                                   model.para_eff_strg[subsystem, 1] * model.para_T +
@@ -295,11 +299,11 @@ class CCHP_Model(object):
         else:
             print('Something wrong')
 
-    def _stage_scen_para(self, temp, demands, cost_elec):
-        self.sdp.para_T = temp
+    def _stage_scen_para(self, demands, temp, cost_elec):
         self.sdp.heat_demand = demands[0]
         self.sdp.cool_demand = demands[1]
         self.sdp.elec_demand = demands[2]
+        self.sdp.para_T = temp
         self.sdp.cost_elec = cost_elec
 
     def solve_sdp(self, markov_demands, markov_prob, data_temp, data_cost, data_prob, solver_info=None, verbosity=0):
@@ -324,7 +328,7 @@ class CCHP_Model(object):
                 self._assign_state([st_h], [st_c], [st_e], 'now')
                 start = time.time()
                 for sc in range(scen_number):
-                    self._stage_scen_para(data_temp[1][t], markov_demands[t - 1][sc], data_cost[1][t])
+                    self._stage_scen_para(markov_demands[t - 1][sc], data_temp[1][t], data_cost[1][t])
                     # cost[t, st_h, st_c, st_e, sc] = -inf
                     cost_now = +inf
                     for st_h_next, st_c_next, st_e_next in itertools.product(*storages):
