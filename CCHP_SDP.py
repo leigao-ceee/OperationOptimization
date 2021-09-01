@@ -31,10 +31,9 @@ class ThermalSystem(object):
         self.cache_beta = None
         self.cache_alpha = None
 
-    def generate_cache(self, stage, scen):
-        self.cache_beta = [[0 for _ in range(scen)] for _ in range(stage + 1)]
-        self.cache_alpha = [[0 for _ in range(scen)] for _ in range(stage + 1)]
-
+    def generate_cache(self, stage, state0, state1, state2, scen):
+        self.cache_beta = np.zeros([stage, state0, state1, state2, scen])
+        self.cache_alpha = np.zeros([stage, state0, state1, state2, scen])
     # def eff_constraint(self, sdp):
     #     def _eff_constrain(model):
     #         if self.name == 'turbine':
@@ -67,8 +66,8 @@ class StorageSystem(object):
         self.state = list(range(ramp + 1))
         self.cache_state = None
 
-    def generate_cache(self, stage, scen):
-        self.cache_state = [[0 for _ in range(scen)] for _ in range(stage + 1)]
+    def generate_cache(self, stage, state0, state1, state2, scen):
+        self.cache_state = np.zeros([stage, state0, state1, state2, scen])
 
 
 class CCHP_Model(object):
@@ -96,26 +95,26 @@ class CCHP_Model(object):
 
     def add_subsystem(self, subsystem=None):
         if not subsystem:
-            self.f2e.append(ThermalSystem(name='turbine', idx=0, capacity=5., ramp=[0.2, 1.],
+            self.f2e.append(ThermalSystem(name='turbine', idx=0, capacity=2000., ramp=[0.2, 1.],
                                           pdata=[0.1283, -0.6592, 0.7945, 0.003],
                                           qdata=[-0.7098, 1.5206, -1.1191, 0.835]))
-            self.h2e.append(ThermalSystem(name='rankine', idx=0, capacity=5., ramp=[0.1, 1.],
+            self.h2e.append(ThermalSystem(name='rankine', idx=0, capacity=1500., ramp=[0.1, 1.],
                                           pdata=[0, 0, 0, 0.15]))
-            self.f2h.append(ThermalSystem(name='boiler', idx=0, capacity=5., ramp=[0.1, 1.],
+            self.f2h.append(ThermalSystem(name='boiler', idx=0, capacity=800., ramp=[0.1, 1.],
                                           pdata=[0, 0, 0, 0.95]))
             # self.h2h.append(ThermalSystem(name='absorb', idx=0, capacity=5., ramp=[0.1, 1.],
             #                               pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
-            self.e2h.append(ThermalSystem(name='heater', idx=0, capacity=5., ramp=[0.1, 1.],
+            self.e2h.append(ThermalSystem(name='heater', idx=0, capacity=800., ramp=[0.1, 1.],
                                           pdata=[0, 0, 0, 0.95]))
-            self.h2c.append(ThermalSystem(name='absorb', idx=0, capacity=5., ramp=[0.1, 1.],
+            self.h2c.append(ThermalSystem(name='absorb', idx=0, capacity=1000., ramp=[0.1, 1.],
                                           pdata=[0, -0.6181, 0.8669, 0.4724]))
-            self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=5., ramp=[0.1, 1.],
+            self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=1000., ramp=[0.1, 1.],
                                           pdata=[0, 0, 0, 3.0]))
-            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=5., ramp=2,
+            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=2,
                                           pdata=[0, 0]))
-            self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=5., ramp=2,
+            self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=1000., ramp=2,
                                           pdata=[0, 0]))
-            self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=5., ramp=2,
+            self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=1000., ramp=2,
                                           pdata=[0, 0]))
         else:
             pass
@@ -148,8 +147,8 @@ class CCHP_Model(object):
         self.sdp.PM_systems = pyo.Set(initialize=[ss.name for ss in self.f2e])
         # PARAMETER DECLARATION
         # ## efficiency
-        self.sdp.para_eff = pyo.Param(self.sdp.conv_systems, pyo.RangeSet(0, 5), initialize=0., mutable=True)
-        self.sdp.para_waste = pyo.Param(self.sdp.PM_systems, pyo.RangeSet(0, 5), initialize=0., mutable=True)
+        self.sdp.para_eff = pyo.Param(self.sdp.conv_systems, pyo.RangeSet(0, 3), initialize=0., mutable=True)
+        self.sdp.para_waste = pyo.Param(self.sdp.PM_systems, pyo.RangeSet(0, 3), initialize=0., mutable=True)
         self.sdp.para_eff_strg = pyo.Param(self.sdp.strg_systems, pyo.RangeSet(0, 1), initialize=0., mutable=True)
         # ## capacity
         self.sdp.para_cp = pyo.Param(self.sdp.all_systems, initialize=0., mutable=True)
@@ -166,14 +165,14 @@ class CCHP_Model(object):
         self.sdp.elec_demand = pyo.Param(initialize=0., mutable=True)
         self.sdp.heat_demand = pyo.Param(initialize=0., mutable=True)
         self.sdp.cool_demand = pyo.Param(initialize=0., mutable=True)
-        self.sdp.cost_fuel = pyo.Param(initialize=0., mutable=True)
-        self.sdp.cost_elec = pyo.Param(initialize=0., mutable=True)
+        self.sdp.cost_fuel = pyo.Param(initialize=1.1763e-5, mutable=True) # fuel unit price ($/kJ)
+        self.sdp.cost_elec = pyo.Param(initialize=0.0, mutable=True)
         # ## set conversion and storage systems efficiency correlation and capacity
         for system in self.conv_system:
             self.sdp.para_cp[system.name] = system.capacity
             self.sdp.para_ramp_l[system.name] = system.ramp[0]
             self.sdp.para_ramp_u[system.name] = system.ramp[1]
-            for i in range(6):
+            for i in range(4):
                 self.sdp.para_eff[system.name, i] = system.pdata[i]
                 if system.name in [ss.name for ss in self.f2e]:
                     self.sdp.para_waste[system.name, i] = system.qdata[i]
@@ -220,13 +219,16 @@ class CCHP_Model(object):
         #            model.para_cp[subsystem]
 
         def _waste_out(model, subsystem):
-            return (model.para_waste[subsystem, 0] * model.beta[subsystem] ** 2 +
-                    model.para_waste[subsystem, 1] * model.para_T ** 2 +
-                    model.para_waste[subsystem, 2] * model.beta[subsystem] * model.para_T +
-                    model.para_waste[subsystem, 3] * model.beta[subsystem] +
-                    model.para_waste[subsystem, 4] * model.para_T +
-                    model.para_waste[subsystem, 5]) * model.energy_in[subsystem] == model.waste_out[subsystem]
-
+            # return (model.para_waste[subsystem, 0] * model.beta[subsystem] ** 2 +
+            #         model.para_waste[subsystem, 1] * model.para_T ** 2 +
+            #         model.para_waste[subsystem, 2] * model.beta[subsystem] * model.para_T +
+            #         model.para_waste[subsystem, 3] * model.beta[subsystem] +
+            #         model.para_waste[subsystem, 4] * model.para_T +
+            #         model.para_waste[subsystem, 5]) * model.energy_in[subsystem] == model.waste_out[subsystem]
+            return (model.para_waste[subsystem, 0] * model.beta[subsystem] ** 3 +
+                    model.para_waste[subsystem, 1] * model.beta[subsystem] ** 2 +
+                    model.para_waste[subsystem, 2] * model.beta[subsystem] +
+                    model.para_waste[subsystem, 3]) * model.energy_in[subsystem] == model.waste_out[subsystem]
         def _waste_in(model):
             return sum(model.waste_out[pm] for pm in model.PM_systems) >= \
                    sum(model.energy_in[sys] for sys in model.wast_systems)
@@ -306,7 +308,7 @@ class CCHP_Model(object):
         self.sdp.para_T = temp
         self.sdp.cost_elec = cost_elec
 
-    def solve_sdp(self, markov_demands, markov_prob, data_temp, data_cost, data_prob, solver_info=None, verbosity=0):
+    def solve_sdp(self, markov_demands, markov_prob, data_temp, data_cost, solver_info=None, verbosity=0):
         """:param
         stream_solver = False  # True prints solver output to screen
         keepfiles = False  # True prints intermediate file names (.nl,.sol,...)
@@ -318,10 +320,9 @@ class CCHP_Model(object):
         scen_number = len(markov_demands[-1])
         storages = [strg.state for strg in self.strg_system]
         cost = np.zeros([stage_number+1, len(storages[0]), len(storages[1]), len(storages[2]), scen_number])
-
-        for system in self.conv_system + self.strg_system:
-            system.generate_cache(stage_number, scen_number)
-
+        markov_prob.append(np.ones([scen_number, scen_number]))
+        for system in self.strg_system + self.conv_system:
+            system.generate_cache(stage_number, len(storages[0]), len(storages[1]), len(storages[2]), scen_number)
         for t in range(stage_number - 1, 0, -1):
             print('Solve the {0}th stage problem'.format(str(t)))
             for st_h, st_c, st_e in itertools.product(*storages):
@@ -335,20 +336,21 @@ class CCHP_Model(object):
                         self._assign_state([st_h_next], [st_c_next], [st_e_next], 'next')
                         results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'], tee=solver_info['stream_solver'])
                         obj = pyo.value(self.sdp.obj)
-                        cost_temp = cost[t+1, st_h_next, st_c_next, st_e_next, sc] + obj
+                        # cost_temp = cost[t + 1, st_h_next, st_c_next, st_e_next, sc] + obj
+                        cost_temp = sum(cost[t + 1, st_h_next, st_c_next, st_e_next, s] * markov_prob[t+1][sc][s]
+                                        for s in range(scen_number)) + obj
                         if cost_temp <= cost_now:
                             cost_now = cost_temp
                     cost[t, st_h, st_c, st_e, sc] = cost_now
-                for sc_now in range(scen_number):
-                    cost[t, st_h, st_c, st_e, sc_now] = sum(cost[t, st_h, st_c, st_e, sc] * markov_prob[t][sc_now][sc]
-                                                            for sc in range(scen_number))
-                print('    The best combination of scen{0} is StHt: {1} and StEl: {2} with cost of {3:4f}'.
-                  format(sc, df_StHt[1][ii], df_StEl[1][jj], f[t, i, j, sc]))
-            cost[t, i, j] = sum(df_Sc[s][1] * f[t, i, j, s] for s in range(1, df_Sc.size + 1))
-            end = time.time()
-            print('  The cost is: {0:.4} and used time is: {1:.2} for StHt {2} and StEl {3}'.
-                  format(cost[t, i, j], end - start, df_StHt[1][i], df_StEl[1][j]))
-            print('########################\n')
+                    # for system in self.strg_system + self.conv_system:
+                    #     if 'storage' in system.name:
+                    #         system.cache_state[t, st_h, st_c, st_e, sc] = st_h_next
+                # for sc_now in range(scen_number):
+                #     cost[t, st_h, st_c, st_e, sc_now] = sum(cost[t, st_h, st_c, st_e, s] * markov_prob[t][sc_now][s]
+                #                                             for s in range(scen_number))
+                end = time.time()
+                print('  The used time for one time step of one state condition is: {0:.2}'.format(end - start))
+                print('start next state condition')
 
 
 # demands into dataframe
@@ -374,7 +376,7 @@ cchp_sdp = CCHP_Model()
 cchp_sdp.set_para_var()
 cchp_sdp.create_model()
 # cchp_sdp.sdp.pprint()
-cchp_sdp.solve_sdp(markov_states, markov_transition, df_Temp, df_EP, df_Sc, verbosity=0)
+cchp_sdp.solve_sdp(markov_states, markov_transition, df_Temp, df_EP, verbosity=0)
 
 gen_elec = {'PM': 6.0, 'ORC': 2.5}
 gen_heat = {'ABH': 5, 'EH': 5, 'Bo': 5}
