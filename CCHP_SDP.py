@@ -34,7 +34,7 @@ class ThermalSystem(object):
     def generate_cache(self, stage, storages, scen):
         self.cache_beta = np.zeros([stage, scen])
         self.cache_alpha = np.zeros([stage, scen])
-        for i in range(len(storages)-1, -1, -1):
+        for i in range(len(storages) - 1, -1, -1):
             self.cache_beta = np.expand_dims(self.cache_beta, axis=1)
             self.cache_beta = np.repeat(self.cache_beta, len(storages[i]), axis=1)
             self.cache_alpha = np.expand_dims(self.cache_alpha, axis=1)
@@ -73,7 +73,7 @@ class StorageSystem(object):
 
     def generate_cache(self, stage, storages, scen):
         self.cache_state = np.zeros([stage, scen])
-        for i in range(len(storages)-1, -1, -1):
+        for i in range(len(storages) - 1, -1, -1):
             self.cache_state = np.expand_dims(self.cache_state, axis=1)
             self.cache_state = np.repeat(self.cache_state, len(storages[i]), axis=1)
 
@@ -103,21 +103,26 @@ class CCHP_Model(object):
 
     def add_subsystem(self, subsystem=None):
         if not subsystem:
+            # turbine: cy zheng, 2014
             self.f2e.append(ThermalSystem(name='turbine', idx=0, capacity=2000., ramp=[0.2, 1.],
                                           pdata=[0.1283, -0.6592, 0.7945, 0.003],
                                           qdata=[-0.7098, 1.5206, -1.1191, 0.835]))
+            # ORC: Xuan Wang, 2016
             self.h2e.append(ThermalSystem(name='rankine', idx=0, capacity=1500., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0.15]))
+                                          pdata=[.31788, -.75303, .66103, -.09595]))
+            # https://jmpcoblog.com/hvac-blog/energy-efficient-hot-water-boiler-plant-design-part-2-golden-rules-of-condensing-boiler-technology
             self.f2h.append(ThermalSystem(name='boiler', idx=0, capacity=800., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0.95]))
+                                          pdata=[1.5819, -3.2913, 2.3124, .23454]))
             # self.h2h.append(ThermalSystem(name='absorb', idx=0, capacity=5., ramp=[0.1, 1.],
             #                               pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
             self.e2h.append(ThermalSystem(name='heater', idx=0, capacity=800., ramp=[0.1, 1.],
                                           pdata=[0, 0, 0, 0.95]))
+            # ABC: cy zheng, 2014
             self.h2c.append(ThermalSystem(name='absorb', idx=0, capacity=1000., ramp=[0.1, 1.],
                                           pdata=[0, -0.6181, 0.8669, 0.4724]))
+            # cao tao phd theis [149]
             self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=1000., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 3.0]))
+                                          pdata=[7.6816, -16.0917, 11.4564, 1.0403]))
             self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=1,
                                           pdata=[0, 0]))
             self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=1000., ramp=1,
@@ -173,7 +178,7 @@ class CCHP_Model(object):
         self.sdp.elec_demand = pyo.Param(initialize=0., mutable=True)
         self.sdp.heat_demand = pyo.Param(initialize=0., mutable=True)
         self.sdp.cool_demand = pyo.Param(initialize=0., mutable=True)
-        self.sdp.cost_fuel = pyo.Param(initialize=1.1763e-5, mutable=True) # fuel unit price ($/kJ)
+        self.sdp.cost_fuel = pyo.Param(initialize=1.1763e-5, mutable=True)  # fuel unit price ($/kJ)
         self.sdp.cost_elec = pyo.Param(initialize=0.0, mutable=True)
         # ## set conversion and storage systems efficiency correlation and capacity
         for system in self.conv_system:
@@ -220,6 +225,7 @@ class CCHP_Model(object):
                                           model.para_eff[subsystem, 2] * model.beta[subsystem] +
                                           model.para_eff[subsystem, 3]) * model.energy_in[subsystem] / \
                    model.para_cp[subsystem]
+
         # def _efficiency_strg(model, subsystem):
         #     return model.eff[subsystem] == (model.para_eff_strg[subsystem, 0] * model.beta[subsystem] +
         #                                   model.para_eff_strg[subsystem, 1] * model.para_T +
@@ -237,6 +243,7 @@ class CCHP_Model(object):
                     model.para_waste[subsystem, 1] * model.beta[subsystem] ** 2 +
                     model.para_waste[subsystem, 2] * model.beta[subsystem] +
                     model.para_waste[subsystem, 3]) * model.energy_in[subsystem] == model.waste_out[subsystem]
+
         def _waste_in(model):
             return sum(model.waste_out[pm] for pm in model.PM_systems) >= \
                    sum(model.energy_in[sys] for sys in model.wast_systems)
@@ -249,15 +256,15 @@ class CCHP_Model(object):
 
         def _M3(model, subsystem):
             return model.M[subsystem] >= model.beta[subsystem] - \
-                   (model.para_ramp_u[subsystem] - model.alpha[subsystem]) * model.para_ramp_u[subsystem]
+                   (1 - model.alpha[subsystem]) * model.para_ramp_u[subsystem]
 
         def _M4(model, subsystem):
             return model.M[subsystem] <= model.beta[subsystem] - \
-                   (model.para_ramp_u[subsystem] - model.alpha[subsystem]) * model.para_ramp_l[subsystem]
+                   (1 - model.alpha[subsystem]) * model.para_ramp_l[subsystem]
 
         def _M5(model, subsystem):
             return model.M[subsystem] <= model.beta[subsystem] + \
-                   (model.para_ramp_u[subsystem] - model.alpha[subsystem]) * model.para_ramp_u[subsystem]
+                   (1 - model.alpha[subsystem]) * model.para_ramp_u[subsystem]
 
         def _demand_heat(model):
             return sum(model.M[sys_heat] * model.para_cp[sys_heat] for sys_heat in model.heat_out) \
@@ -323,33 +330,35 @@ class CCHP_Model(object):
         scen_number = len(markov_demands[-1])
         self.sdp.storages = [strg.state for strg in self.strg_system]
         self.sdp.cost = np.zeros([stage_number + 1, scen_number])
-        for i in range(len(self.sdp.storages)-1, -1, -1):
+        for i in range(len(self.sdp.storages) - 1, -1, -1):
             self.sdp.cost = np.expand_dims(self.sdp.cost, axis=1)
             self.sdp.cost = np.repeat(self.sdp.cost, len(self.sdp.storages[i]), axis=1)
         markov_prob.append(np.ones([scen_number, scen_number]))
         for system in self.strg_system + self.conv_system:
             system.generate_cache(stage_number, self.sdp.storages, scen_number)
-        for t in range(stage_number - 1, 0, -1):
+        for t in range(stage_number - 12, 0, -1):
+            start = time.time()
             print('Solve the {0}th stage problem'.format(str(t)))
             # for st_h, st_c, st_e in itertools.product(*storages):
             for st_now in itertools.product(*self.sdp.storages):
                 self._assign_state(st_now, 'now')
-                start = time.time()
                 for sc in range(scen_number):
-                    self._stage_scen_para(markov_demands[t][sc], data_temp[1][t+1], data_cost[1][t+1])
+                    self._stage_scen_para(markov_demands[t][sc], data_temp[1][t + 1], data_cost[1][t + 1])
                     # cost[t, st_h, st_c, st_e, sc] = -inf
                     cost_now = +inf
                     # for st_h_next, st_c_next, st_e_next in itertools.product(*storages):
                     for st_next in itertools.product(*self.sdp.storages):
                         self._assign_state(st_next, 'next')
-                        results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'], tee=solver_info['stream_solver'])
+                        results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'],
+                                            tee=solver_info['stream_solver'])
                         obj = pyo.value(self.sdp.obj)
                         # cost_temp = cost[t + 1, st_h_next, st_c_next, st_e_next, sc] + obj
                         if len(self.sdp.storages) == 3:
-                            cost_temp = sum(self.sdp.cost[t + 1, st_next[0], st_next[1], st_next[2], s] * markov_prob[t+1][sc][s]
-                                            for s in range(scen_number)) + obj
+                            cost_temp = sum(
+                                self.sdp.cost[t + 1, st_next[0], st_next[1], st_next[2], s] * markov_prob[t + 1][sc][s]
+                                for s in range(scen_number)) + obj
                         elif len(self.sdp.storages) == 2:
-                            cost_temp = sum(self.sdp.cost[t + 1, st_next[0], st_next[1], s] * markov_prob[t+1][sc][s]
+                            cost_temp = sum(self.sdp.cost[t + 1, st_next[0], st_next[1], s] * markov_prob[t + 1][sc][s]
                                             for s in range(scen_number)) + obj
                         if cost_temp <= cost_now:
                             cost_now = cost_temp
@@ -363,9 +372,9 @@ class CCHP_Model(object):
                 # for sc_now in range(scen_number):
                 #     cost[t, st_h, st_c, st_e, sc_now] = sum(cost[t, st_h, st_c, st_e, s] * markov_prob[t][sc_now][s]
                 #                                             for s in range(scen_number))
-                end = time.time()
-                print('  The used time for one time step of one state condition is: {0:.2}'.format(end - start))
-                print('start next state condition')
+            end = time.time()
+            print('  The used time for one time step is: {0:.2}'.format(end - start))
+            print('start next stage condition')
         cost_now = +inf
         self._assign_state([], 'first')
         # self._stage_scen_para(markov_demands[t][sc], data_temp[1][t], data_cost[1][t])
@@ -387,6 +396,8 @@ class CCHP_Model(object):
             self.sdp.cost[0, 0, 0, 0, 0] = cost_now
         elif len(self.sdp.storages) == 2:
             self.sdp.cost[0, 0, 0, 0] = cost_now
+
+
 # demands into dataframe
 infile_states = open('sampling/markov_states', 'rb')
 markov_states = pickle.load(infile_states)
