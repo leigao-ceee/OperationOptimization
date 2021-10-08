@@ -4,11 +4,9 @@
 # @Email    : leigao@umd.edu
 
 import pyomo.environ as pyo
-import pandas as pd
 import numpy as np
 import itertools
 import time
-import pickle
 from math import inf
 
 
@@ -34,23 +32,11 @@ class ThermalSystem(object):
     def generate_cache(self, stage, storages, scen):
         self.cache_beta = np.zeros([stage, scen])
         self.cache_alpha = np.zeros([stage, scen])
-        for i in range(len(storages) - 1, -1, -1):
-            self.cache_beta = np.expand_dims(self.cache_beta, axis=1)
-            self.cache_beta = np.repeat(self.cache_beta, len(storages[i]), axis=1)
-            self.cache_alpha = np.expand_dims(self.cache_alpha, axis=1)
-            self.cache_alpha = np.repeat(self.cache_alpha, len(storages[i]), axis=1)
-    # def eff_constraint(self, sdp):
-    #     def _eff_constrain(model):
-    #         if self.name == 'turbine':
-    #             model.alpha = pyo.Var(within=pyo.Binary, initialize=1)
-    #             model.beta = pyo.Var(within=pyo.NonNegativeReals, bounds=(self.ramp[0], self.ramp[1]), initialize=0)
-    #             sdp.ein[self.name] = pyo.Var(within=pyo.NonNegativeReals, initialize=0)
-    #             return sdp.alpha[self.name] == (self.pdata[0] * sdp.beta[self.name] ** 2 +
-    #                                             self.pdata[1] * sdp.p0 ** 2 +
-    #                                             self.pdata[2] * sdp.beta[self.name] * sdp.p0 +
-    #                                             self.pdata[3] * sdp.beta[self.name] +
-    #                                             self.pdata[4] * sdp.p0 +
-    #                                             self.pdata[5]) * sdp.ein[self.name] / self.capacity
+        for i in range(len(storages)):
+            self.cache_beta = np.expand_dims(self.cache_beta, axis=-1)
+            self.cache_beta = np.repeat(self.cache_beta, len(storages[i]), axis=-1)
+            self.cache_alpha = np.expand_dims(self.cache_alpha, axis=-1)
+            self.cache_alpha = np.repeat(self.cache_alpha, len(storages[i]), axis=-1)
 
 
 class StorageSystem(object):
@@ -73,12 +59,12 @@ class StorageSystem(object):
 
     def generate_cache(self, stage, storages, scen):
         self.cache_state = np.zeros([stage, scen])
-        for i in range(len(storages) - 1, -1, -1):
-            self.cache_state = np.expand_dims(self.cache_state, axis=1)
-            self.cache_state = np.repeat(self.cache_state, len(storages[i]), axis=1)
+        for i in range(len(storages)):
+            self.cache_state = np.expand_dims(self.cache_state, axis=-1)
+            self.cache_state = np.repeat(self.cache_state, len(storages[i]), axis=-1)
 
 
-class CCHP_Model(object):
+class SDP_Model(object):
     def __init__(self):
         # energy flow type: f2e(fuel to electricity), h2e; f2h, e2h, h2h; e2c, h2c
         self.sdp = pyo.ConcreteModel()
@@ -123,12 +109,12 @@ class CCHP_Model(object):
             # cao tao phd theis [149]
             self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=1000., ramp=[0.1, 1.],
                                           pdata=[7.6816, -16.0917, 11.4564, 1.0403]))
-            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=1,
+            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=500., ramp=1,
                                           pdata=[0, 0]))
-            self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=1000., ramp=1,
+            self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=500., ramp=1,
                                           pdata=[0, 0]))
-            # self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=1000., ramp=2,
-            #                               pdata=[0, 0]))
+            self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=500., ramp=1,
+                                          pdata=[0, 0]))
         else:
             pass
         # self.conv_system = self.f2e + self.h2e + self.f2h + self.h2h + self.e2h + self.h2c + self.e2c
@@ -324,108 +310,56 @@ class CCHP_Model(object):
         keepfiles = False  # True prints intermediate file names (.nl,.sol,...)
         """
         if solver_info is None:
-            solver_info = {'solver': "couenne", 'solver_io': None, 'keepfiles': True, 'stream_solver': False}
+            solver_info = {'solver': "bonmin", 'solver_io': None, 'keepfiles': True, 'stream_solver': False}
         opt = pyo.SolverFactory(solver_info['solver'], solver_io=solver_info['solver_io'])
         stage_number = len(markov_demands)
         scen_number = len(markov_demands[-1])
         self.sdp.storages = [strg.state for strg in self.strg_system]
         self.sdp.cost = np.zeros([stage_number + 1, scen_number])
-        for i in range(len(self.sdp.storages) - 1, -1, -1):
-            self.sdp.cost = np.expand_dims(self.sdp.cost, axis=1)
-            self.sdp.cost = np.repeat(self.sdp.cost, len(self.sdp.storages[i]), axis=1)
+        for i in range(len(self.sdp.storages)):
+            self.sdp.cost = np.expand_dims(self.sdp.cost, axis=-1)
+            self.sdp.cost = np.repeat(self.sdp.cost, len(self.sdp.storages[i]), axis=-1)
         markov_prob.append(np.ones([scen_number, scen_number]))
         for system in self.strg_system + self.conv_system:
             system.generate_cache(stage_number, self.sdp.storages, scen_number)
-        for t in range(stage_number - 12, 0, -1):
+        for t in range(stage_number - 1, 0, -1):
             start = time.time()
             print('Solve the {0}th stage problem'.format(str(t)))
-            # for st_h, st_c, st_e in itertools.product(*storages):
             for st_now in itertools.product(*self.sdp.storages):
                 self._assign_state(st_now, 'now')
                 for sc in range(scen_number):
                     self._stage_scen_para(markov_demands[t][sc], data_temp[1][t + 1], data_cost[1][t + 1])
-                    # cost[t, st_h, st_c, st_e, sc] = -inf
                     cost_now = +inf
-                    # for st_h_next, st_c_next, st_e_next in itertools.product(*storages):
                     for st_next in itertools.product(*self.sdp.storages):
                         self._assign_state(st_next, 'next')
                         results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'],
                                             tee=solver_info['stream_solver'])
                         obj = pyo.value(self.sdp.obj)
-                        # cost_temp = cost[t + 1, st_h_next, st_c_next, st_e_next, sc] + obj
-                        if len(self.sdp.storages) == 3:
-                            cost_temp = sum(
-                                self.sdp.cost[t + 1, st_next[0], st_next[1], st_next[2], s] * markov_prob[t + 1][sc][s]
-                                for s in range(scen_number)) + obj
-                        elif len(self.sdp.storages) == 2:
-                            cost_temp = sum(self.sdp.cost[t + 1, st_next[0], st_next[1], s] * markov_prob[t + 1][sc][s]
-                                            for s in range(scen_number)) + obj
+                        cost_temp = sum(self.sdp.cost[t + 1, s][st_next] * markov_prob[t + 1][sc][s]
+                                        for s in range(scen_number)) + obj
                         if cost_temp <= cost_now:
                             cost_now = cost_temp
-                    if len(self.sdp.storages) == 3:
-                        self.sdp.cost[t, st_now[0], st_now[1], st_now[2], sc] = cost_now
-                    elif len(self.sdp.storages) == 2:
-                        self.sdp.cost[t, st_now[0], st_now[1], sc] = cost_now
-                    # for system in self.strg_system + self.conv_system:
-                    #     if 'storage' in system.name:
-                    #         system.cache_state[t, st_h, st_c, st_e, sc] = st_h_next
-                # for sc_now in range(scen_number):
-                #     cost[t, st_h, st_c, st_e, sc_now] = sum(cost[t, st_h, st_c, st_e, s] * markov_prob[t][sc_now][s]
-                #                                             for s in range(scen_number))
+                            self.sdp.cost[t, sc][st_now] = cost_temp
+                            for idx, system in enumerate(self.strg_system):
+                                system.cache_state[t, sc][st_now] = st_next[idx]
+                            for system in self.conv_system:
+                                system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
+                                system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
             end = time.time()
             print('  The used time for one time step is: {0:.2}'.format(end - start))
-            print('start next stage condition')
         cost_now = +inf
         self._assign_state([], 'first')
-        # self._stage_scen_para(markov_demands[t][sc], data_temp[1][t], data_cost[1][t])
         self._stage_scen_para(markov_demands[0][0], data_temp[1][1], data_cost[1][1])
         for st_next in itertools.product(*self.sdp.storages):
             self._assign_state(st_next, 'next')
             results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'], tee=solver_info['stream_solver'])
             obj = pyo.value(self.sdp.obj)
-            # cost_temp = cost[t + 1, st_h_next, st_c_next, st_e_next, sc] + obj
-            if len(self.sdp.storages) == 3:
-                cost_temp = sum(self.sdp.cost[1, st_next[0], st_next[1], st_next[2], s] * markov_prob[1][0][s]
-                                for s in range(scen_number)) + obj
-            elif len(self.sdp.storages) == 2:
-                cost_temp = sum(self.sdp.cost[1, st_next[0], st_next[1], s] * markov_prob[1][0][s]
-                                for s in range(scen_number)) + obj
+            cost_temp = sum(self.sdp.cost[1, s][st_next] * markov_prob[1][0][s] for s in range(scen_number)) + obj
             if cost_temp <= cost_now:
                 cost_now = cost_temp
-        if len(self.sdp.storages) == 3:
-            self.sdp.cost[0, 0, 0, 0, 0] = cost_now
-        elif len(self.sdp.storages) == 2:
-            self.sdp.cost[0, 0, 0, 0] = cost_now
-
-
-# demands into dataframe
-infile_states = open('sampling/markov_states', 'rb')
-markov_states = pickle.load(infile_states)
-infile_states.close()
-infile_transition = open('sampling/markov_transition', 'rb')
-markov_transition = pickle.load(infile_transition)
-infile_transition.close()
-
-path = r'sampling\cchp_data.xlsx'
-df_HD = pd.read_excel(path, sheet_name='heating_demand', header=0, index_col=0)
-df_CD = pd.read_excel(path, sheet_name='heating_demand', header=0, index_col=0)
-df_ED = pd.read_excel(path, sheet_name='electricity_demand', header=0, index_col=0)
-df_EP = pd.read_excel(path, sheet_name='electricity_price', header=0, index_col=0)
-df_Temp = pd.read_excel(path, sheet_name='temperature', header=0, index_col=0)
-df_Sc = pd.read_excel(path, sheet_name='possibility', header=0, index_col=0)
-df_StHt = pd.read_excel(path, sheet_name='storage_heating', header=0, index_col=0)
-df_StEl = pd.read_excel(path, sheet_name='storage_electricity', header=0, index_col=0)
-
-cchp_sdp = CCHP_Model()
-# cchp_sdp.add_subsystem()
-cchp_sdp.set_para_var()
-cchp_sdp.create_model()
-# cchp_sdp.sdp.pprint()
-cchp_sdp.solve_sdp(markov_states, markov_transition, df_Temp, df_EP, verbosity=0)
-
-gen_elec = {'PM': 6.0, 'ORC': 2.5}
-gen_heat = {'ABH': 5, 'EH': 5, 'Bo': 5}
-con_fuel = ['PM', 'Bo']
-con_waste = ['ORC', 'ABH']
-storage = {'El': 5, 'Ht': 5}
-cchp = CCHP_Model(gen_elec, gen_heat, con_fuel, con_waste, storage)
+                self.sdp.cost[0, 0][st_now] = cost_temp
+                for idx, system in enumerate(self.strg_system):
+                    system.cache_state[0, 0][st_now] = st_next[idx]
+                for system in self.conv_system:
+                    system.cache_beta[0, 0][st_now] = pyo.value(self.sdp.beta[system.name])
+                    system.cache_alpha[0, 0][st_now] = pyo.value(self.sdp.alpha[system.name])
