@@ -85,6 +85,7 @@ class SDP_Model(object):
         self.elec_out = []
         self.heat_out = []
         self.cool_out = []
+
         self.add_subsystem()
 
     def add_subsystem(self, subsystem=None):
@@ -297,69 +298,87 @@ class SDP_Model(object):
         else:
             print('Something wrong')
 
-    def _stage_scen_para(self, demands, temp, cost_elec):
+    def _stage_scen_para(self, demands, cost_elec):
         self.sdp.heat_demand = demands[0]
         self.sdp.cool_demand = demands[1]
         self.sdp.elec_demand = demands[2]
-        self.sdp.para_T = temp
         self.sdp.cost_elec = cost_elec
+        # self.sdp.para_T = temp
 
-    def solve_sdp(self, markov_demands, markov_prob, data_temp, data_cost, solver_info=None, verbosity=0):
+    def _subproblem(self, opt, t, sc, st_now):
+        cost_now = +inf
+        for st_next in itertools.product(*self.sdp.storages):
+            self._assign_state(st_next, 'next')
+            results = opt.solve(self.sdp, keepfiles=True, tee=False)
+            obj = pyo.value(self.sdp.obj)
+            cost_temp = sum(self.sdp.cost[t + 1, s][st_next] * self.markov_prob[t + 1][sc][s]
+                            for s in range(self.scen_number)) + obj
+            if cost_temp <= cost_now:
+                cost_now = cost_temp
+                self.sdp.cost[t, sc][st_now] = cost_temp
+                for idx, system in enumerate(self.strg_system):
+                    system.cache_state[t, sc][st_now] = st_next[idx]
+                for system in self.conv_system:
+                    system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
+                    system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
+
+    def solve_sdp(self, markov_demands, markov_prob, data_cost, solver_info=None, verbosity=0):
         """:param
         stream_solver = False  # True prints solver output to screen
         keepfiles = False  # True prints intermediate file names (.nl,.sol,...)
         """
         if solver_info is None:
-            solver_info = {'solver': "bonmin", 'solver_io': None, 'keepfiles': True, 'stream_solver': False}
+            solver_info = {'solver': "bonmin", 'solver_io': None, }
         opt = pyo.SolverFactory(solver_info['solver'], solver_io=solver_info['solver_io'])
-        stage_number = len(markov_demands)
-        scen_number = len(markov_demands[-1])
+        self.stage_number = len(markov_demands)
+        self.scen_number = len(markov_demands[-1])
         self.sdp.storages = [strg.state for strg in self.strg_system]
-        self.sdp.cost = np.zeros([stage_number + 1, scen_number])
+        self.sdp.cost = np.zeros([self.stage_number + 1, self.scen_number])
         for i in range(len(self.sdp.storages)):
             self.sdp.cost = np.expand_dims(self.sdp.cost, axis=-1)
             self.sdp.cost = np.repeat(self.sdp.cost, len(self.sdp.storages[i]), axis=-1)
-        markov_prob.append(np.ones([scen_number, scen_number]))
+        markov_prob.append(np.ones([self.scen_number, self.scen_number]))
+        self.markov_prob = markov_prob
         for system in self.strg_system + self.conv_system:
-            system.generate_cache(stage_number, self.sdp.storages, scen_number)
-        for t in range(stage_number - 1, 0, -1):
+            system.generate_cache(self.stage_number, self.sdp.storages, self.scen_number)
+        for t in range(self.stage_number - 1, 0, -1):
             start = time.time()
             print('Solve the {0}th stage problem'.format(str(t)))
             for st_now in itertools.product(*self.sdp.storages):
                 self._assign_state(st_now, 'now')
-                for sc in range(scen_number):
-                    self._stage_scen_para(markov_demands[t][sc], data_temp[1][t + 1], data_cost[1][t + 1])
-                    cost_now = +inf
-                    for st_next in itertools.product(*self.sdp.storages):
-                        self._assign_state(st_next, 'next')
-                        results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'],
-                                            tee=solver_info['stream_solver'])
-                        obj = pyo.value(self.sdp.obj)
-                        cost_temp = sum(self.sdp.cost[t + 1, s][st_next] * markov_prob[t + 1][sc][s]
-                                        for s in range(scen_number)) + obj
-                        if cost_temp <= cost_now:
-                            cost_now = cost_temp
-                            self.sdp.cost[t, sc][st_now] = cost_temp
-                            for idx, system in enumerate(self.strg_system):
-                                system.cache_state[t, sc][st_now] = st_next[idx]
-                            for system in self.conv_system:
-                                system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
-                                system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
+                for sc in range(self.scen_number):
+                    self._stage_scen_para(markov_demands[t][sc],  data_cost[1][t + 1])
+                    self._subproblem(opt, t, sc, st_now)
+                    # for st_next in itertools.product(*self.sdp.storages):
+                    #     self._assign_state(st_next, 'next')
+                    #     results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'],
+                    #                         tee=solver_info['stream_solver'])
+                    #     obj = pyo.value(self.sdp.obj)
+                    #     cost_temp = sum(self.sdp.cost[t + 1, s][st_next] * markov_prob[t + 1][sc][s]
+                    #                     for s in range(self.scen_number)) + obj
+                    #     if cost_temp <= cost_now:
+                    #         cost_now = cost_temp
+                    #         self.sdp.cost[t, sc][st_now] = cost_temp
+                    #         for idx, system in enumerate(self.strg_system):
+                    #             system.cache_state[t, sc][st_now] = st_next[idx]
+                    #         for system in self.conv_system:
+                    #             system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
+                    #             system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
             end = time.time()
             print('  The used time for one time step is: {0:.2}'.format(end - start))
-        cost_now = +inf
         self._assign_state([], 'first')
-        self._stage_scen_para(markov_demands[0][0], data_temp[1][1], data_cost[1][1])
-        for st_next in itertools.product(*self.sdp.storages):
-            self._assign_state(st_next, 'next')
-            results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'], tee=solver_info['stream_solver'])
-            obj = pyo.value(self.sdp.obj)
-            cost_temp = sum(self.sdp.cost[1, s][st_next] * markov_prob[1][0][s] for s in range(scen_number)) + obj
-            if cost_temp <= cost_now:
-                cost_now = cost_temp
-                self.sdp.cost[0, 0][st_now] = cost_temp
-                for idx, system in enumerate(self.strg_system):
-                    system.cache_state[0, 0][st_now] = st_next[idx]
-                for system in self.conv_system:
-                    system.cache_beta[0, 0][st_now] = pyo.value(self.sdp.beta[system.name])
-                    system.cache_alpha[0, 0][st_now] = pyo.value(self.sdp.alpha[system.name])
+        self._stage_scen_para(markov_demands[0][0], data_cost[1][1])
+        self._subproblem(opt, 0, 0, st_now)
+        # for st_next in itertools.product(*self.sdp.storages):
+        #     self._assign_state(st_next, 'next')
+        #     results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'], tee=solver_info['stream_solver'])
+        #     obj = pyo.value(self.sdp.obj)
+        #     cost_temp = sum(self.sdp.cost[1, s][st_next] * markov_prob[1][0][s] for s in range(scen_number)) + obj
+        #     if cost_temp <= cost_now:
+        #         cost_now = cost_temp
+        #         self.sdp.cost[0, 0][st_now] = cost_temp
+        #         for idx, system in enumerate(self.strg_system):
+        #             system.cache_state[0, 0][st_now] = st_next[idx]
+        #         for system in self.conv_system:
+        #             system.cache_beta[0, 0][st_now] = pyo.value(self.sdp.beta[system.name])
+        #             system.cache_alpha[0, 0][st_now] = pyo.value(self.sdp.alpha[system.name])
