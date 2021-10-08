@@ -349,36 +349,8 @@ class SDP_Model(object):
                 for sc in range(self.scen_number):
                     self._stage_scen_para(markov_demands[t][sc],  data_cost[1][t + 1])
                     self._subproblem(opt, t, sc, st_now)
-                    # for st_next in itertools.product(*self.sdp.storages):
-                    #     self._assign_state(st_next, 'next')
-                    #     results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'],
-                    #                         tee=solver_info['stream_solver'])
-                    #     obj = pyo.value(self.sdp.obj)
-                    #     cost_temp = sum(self.sdp.cost[t + 1, s][st_next] * markov_prob[t + 1][sc][s]
-                    #                     for s in range(self.scen_number)) + obj
-                    #     if cost_temp <= cost_now:
-                    #         cost_now = cost_temp
-                    #         self.sdp.cost[t, sc][st_now] = cost_temp
-                    #         for idx, system in enumerate(self.strg_system):
-                    #             system.cache_state[t, sc][st_now] = st_next[idx]
-                    #         for system in self.conv_system:
-                    #             system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
-                    #             system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
             end = time.time()
             print('  The used time for one time step is: {0:.2}'.format(end - start))
         self._assign_state([], 'first')
         self._stage_scen_para(markov_demands[0][0], data_cost[1][1])
         self._subproblem(opt, 0, 0, st_now)
-        # for st_next in itertools.product(*self.sdp.storages):
-        #     self._assign_state(st_next, 'next')
-        #     results = opt.solve(self.sdp, keepfiles=solver_info['keepfiles'], tee=solver_info['stream_solver'])
-        #     obj = pyo.value(self.sdp.obj)
-        #     cost_temp = sum(self.sdp.cost[1, s][st_next] * markov_prob[1][0][s] for s in range(scen_number)) + obj
-        #     if cost_temp <= cost_now:
-        #         cost_now = cost_temp
-        #         self.sdp.cost[0, 0][st_now] = cost_temp
-        #         for idx, system in enumerate(self.strg_system):
-        #             system.cache_state[0, 0][st_now] = st_next[idx]
-        #         for system in self.conv_system:
-        #             system.cache_beta[0, 0][st_now] = pyo.value(self.sdp.beta[system.name])
-        #             system.cache_alpha[0, 0][st_now] = pyo.value(self.sdp.alpha[system.name])
