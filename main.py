@@ -8,7 +8,7 @@ from CCHP_SDP import SDP_Model
 from util import record_cache, record_performance
 
 
-def main(file_cache, file_performance):
+def main(filename):
     # Load demands
     infile_states = open('sampling/markov_states', 'rb')
     markov_states = pickle.load(infile_states)
@@ -24,9 +24,12 @@ def main(file_cache, file_performance):
     cchp_sdp.create_model()
     st_now = cchp_sdp.solve_sdp(markov_states, markov_transition, df_EP, verbosity=0)
     # Record results
-    record_cache(file_cache, cchp_sdp)
-    record_performance(file_performance, cchp_sdp, st_now)
+    record_cache(filename + '_detailed', cchp_sdp)
+    record_performance(filename + '_overall', cchp_sdp, st_now)
 
 
 if __name__ == '__main__':
-    main('24hr_2h0e2c_detailed', '24hr_2h0e2c_overall')
+    # main('24hr_2h0e0c')
+    infile_cache = open('result/24hr_2h0e0c_detailed_cost', 'rb')
+    cache_detailed = pickle.load(infile_cache)
+    infile_cache.close()
