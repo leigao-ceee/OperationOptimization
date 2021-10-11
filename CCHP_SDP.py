@@ -54,7 +54,7 @@ class StorageSystem(object):
         self.capacity = capacity
         self.ramp = ramp
         self.pdata = pdata
-        self.state = list(range(ramp + 1))
+        self.state = list(range(ramp))
         self.cache_state = None
 
     def generate_cache(self, stage, storages, scen):
@@ -85,7 +85,6 @@ class SDP_Model(object):
         self.elec_out = []
         self.heat_out = []
         self.cool_out = []
-
         self.add_subsystem()
 
     def add_subsystem(self, subsystem=None):
@@ -110,12 +109,12 @@ class SDP_Model(object):
             # cao tao phd theis [149]
             self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=1000., ramp=[0.1, 1.],
                                           pdata=[7.6816, -16.0917, 11.4564, 1.0403]))
-            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=500., ramp=1,
+            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=2,
                                           pdata=[0, 0]))
-            self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=500., ramp=1,
-                                          pdata=[0, 0]))
-            self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=500., ramp=1,
-                                          pdata=[0, 0]))
+            # self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=1000., ramp=10,
+            #                               pdata=[0, 0]))
+            # self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=500., ramp=1,
+            #                               pdata=[0, 0]))
         else:
             pass
         # self.conv_system = self.f2e + self.h2e + self.f2h + self.h2h + self.e2h + self.h2c + self.e2c
@@ -309,7 +308,7 @@ class SDP_Model(object):
         cost_now = +inf
         for st_next in itertools.product(*self.sdp.storages):
             self._assign_state(st_next, 'next')
-            results = opt.solve(self.sdp, keepfiles=True, tee=False)
+            results = opt.solve(self.sdp, keepfiles=False, tee=False, report_timing=False)
             obj = pyo.value(self.sdp.obj)
             cost_temp = sum(self.sdp.cost[t + 1, s][st_next] * self.markov_prob[t + 1][sc][s]
                             for s in range(self.scen_number)) + obj
@@ -341,7 +340,7 @@ class SDP_Model(object):
         self.markov_prob = markov_prob
         for system in self.strg_system + self.conv_system:
             system.generate_cache(self.stage_number, self.sdp.storages, self.scen_number)
-        for t in range(self.stage_number - 1, 0, -1):
+        for t in range(self.stage_number - 23, 0, -1):
             start = time.time()
             print('Solve the {0}th stage problem'.format(str(t)))
             for st_now in itertools.product(*self.sdp.storages):
@@ -354,3 +353,4 @@ class SDP_Model(object):
         self._assign_state([], 'first')
         self._stage_scen_para(markov_demands[0][0], data_cost[1][1])
         self._subproblem(opt, 0, 0, st_now)
+        return st_now
