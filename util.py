@@ -22,7 +22,7 @@ def record_cache(filename, model):
     print('Finish record cache data')
 
 
-def record_performance(file_in, model, st_now):
+def record_performance(file_in, model, st_now, time_count):
     if os.path.isfile('result/' + file_in):
         print("Output file for parameter already exists.")
         file_temp = 'result/' + file_in + ".old"
@@ -38,5 +38,6 @@ def record_performance(file_in, model, st_now):
 
     file.write("%%%%%%%%   Performance Information    %%%%%%%% \n")
     file.write('The first stage cost is {0} '.format(model.sdp.cost[0, 0][st_now]) + '\n')
+    file.write('Average time consumption is {0} '.format(time_count) + '\n')
     file.close()
     print('Finish record performance data')

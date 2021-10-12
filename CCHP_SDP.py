@@ -340,7 +340,8 @@ class SDP_Model(object):
         self.markov_prob = markov_prob
         for system in self.strg_system + self.conv_system:
             system.generate_cache(self.stage_number, self.sdp.storages, self.scen_number)
-        for t in range(self.stage_number - 23, 0, -1):
+        start0 = time.time()
+        for t in range(self.stage_number - 1, 0, -1):
             start = time.time()
             print('Solve the {0}th stage problem'.format(str(t)))
             for st_now in itertools.product(*self.sdp.storages):
@@ -353,4 +354,7 @@ class SDP_Model(object):
         self._assign_state([], 'first')
         self._stage_scen_para(markov_demands[0][0], data_cost[1][1])
         self._subproblem(opt, 0, 0, st_now)
-        return st_now
+        end0 = time.time()
+        state_iter = len(list(itertools.product(*self.sdp.storages)))
+        time_average = (end0 - start0)/((self.stage_number-1)*self.scen_number*state_iter**2)
+        return st_now, time_average

@@ -22,14 +22,14 @@ def main(filename):
     cchp_sdp = SDP_Model()
     cchp_sdp.set_para_var()
     cchp_sdp.create_model()
-    st_now = cchp_sdp.solve_sdp(markov_states, markov_transition, df_EP, verbosity=0)
+    st_now, time_average = cchp_sdp.solve_sdp(markov_states, markov_transition, df_EP, verbosity=0)
     # Record results
     record_cache(filename + '_detailed', cchp_sdp)
-    record_performance(filename + '_overall', cchp_sdp, st_now)
+    record_performance(filename + '_overall', cchp_sdp, st_now, time_average)
 
 
 if __name__ == '__main__':
-    # main('24hr_2h0e0c')
-    infile_cache = open('result/24hr_2h0e0c_detailed_cost', 'rb')
-    cache_detailed = pickle.load(infile_cache)
-    infile_cache.close()
+    main('24hr_2h0e0c')
+    # infile_cache = open('result/24hr_10h0e0c_detailed_cache', 'rb')
+    # cache_detailed = pickle.load(infile_cache)
+    # infile_cache.close()
