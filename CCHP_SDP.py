@@ -195,7 +195,7 @@ class SDP_Model(object):
         self.sdp.energy_in = pyo.Var(self.sdp.conv_systems, within=pyo.NonNegativeReals, initialize=0.)
         self.sdp.waste_out = pyo.Var(self.sdp.PM_systems, within=pyo.NonNegativeReals, initialize=0.)
         self.sdp.energy_out = pyo.Var(self.sdp.conv_systems, within=pyo.NonNegativeReals, initialize=0.)
-        self.sdp.grid = pyo.Var(within=pyo.NonNegativeReals, initialize=0.)
+        self.sdp.grid = pyo.Var(within=pyo.NonNegativeReals, initialize=0.)  # none-negative for forbidden sale to grid
 
     def create_model(self):
         def _efficiency(model, subsystem):
@@ -263,7 +263,7 @@ class SDP_Model(object):
                           / model.para_strg_u[strg_cool] for strg_cool in model.cool_strg)) >= model.cool_demand
 
         def _demand_elec(model):
-            return sum(model.M[sys_elec] * model.para_cp[sys_elec] for sys_elec in model.elec_out) \
+            return sum(model.M[sys_elec] * model.para_cp[sys_elec] for sys_elec in model.elec_out) + model.grid \
                    + (sum(model.para_cp[strg_elec] * (model.beta_strg_next[strg_elec] - model.beta_strg_now[strg_elec])
                           / model.para_strg_u[strg_elec] for strg_elec in model.elec_strg)) >= model.elec_demand
 
