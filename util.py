@@ -27,7 +27,7 @@ def record_performance(file_in, model, st_now, time_count):
         print("Output file for parameter already exists.")
         file_temp = 'result/' + file_in + ".old"
         print("Existing file has been copied to:", file_temp)
-    file = open('result/' + file_in, 'w')
+    file = open('result/' + file_in + '.txt', 'w')
     file.write("%%%%%%%%  Thermal System Information  %%%%%%%% \n")
     for sys in model.conv_system:
         file.write(sys.name + str(sys.idx) + ' capacity: {0}, ramp : {1} '.format(sys.capacity, sys.ramp) + '\n')
