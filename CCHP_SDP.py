@@ -109,7 +109,7 @@ class SDP_Model(object):
             # cao tao phd theis [149]
             self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=1000., ramp=[0.1, 1.],
                                           pdata=[7.6816, -16.0917, 11.4564, 1.0403]))
-            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=2,
+            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=4,
                                           pdata=[0, 0]))
             # self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=1000., ramp=10,
             #                               pdata=[0, 0]))
@@ -164,8 +164,8 @@ class SDP_Model(object):
         self.sdp.elec_demand = pyo.Param(initialize=0., mutable=True)
         self.sdp.heat_demand = pyo.Param(initialize=0., mutable=True)
         self.sdp.cool_demand = pyo.Param(initialize=0., mutable=True)
-        self.sdp.cost_fuel = pyo.Param(initialize=1.1763e-5, mutable=True)  # fuel unit price ($/kJ)
-        self.sdp.cost_elec = pyo.Param(initialize=0.0, mutable=True)
+        self.sdp.cost_fuel = pyo.Param(initialize=6.389e-6, mutable=True)  # fuel unit price ($/kJ)
+        self.sdp.cost_elec = pyo.Param(initialize=11.21, mutable=True)  # electricity unit price (c/kJ)
         # ## set conversion and storage systems efficiency correlation and capacity
         for system in self.conv_system:
             self.sdp.para_cp[system.name] = system.capacity
@@ -269,7 +269,7 @@ class SDP_Model(object):
 
         def _obj(model):
             return model.cost_fuel * sum(model.energy_in[ss] for ss in model.fuel_systems) * 3600 + \
-                   model.cost_elec * (sum(model.energy_in[ss] for ss in model.grid_systems) + model.grid)
+                   model.cost_elec * (sum(model.energy_in[ss] for ss in model.grid_systems) + model.grid)/100
 
         self.sdp.st_eff = pyo.Constraint(self.sdp.conv_systems, rule=_efficiency)
         self.sdp.st_wast_out = pyo.Constraint(self.sdp.PM_systems, rule=_waste_out)
@@ -297,11 +297,11 @@ class SDP_Model(object):
         else:
             print('Something wrong')
 
-    def _stage_scen_para(self, demands, cost_elec):
+    def _stage_scen_para(self, demands):
         self.sdp.heat_demand = demands[0]
         self.sdp.cool_demand = demands[1]
         self.sdp.elec_demand = demands[2]
-        self.sdp.cost_elec = cost_elec
+        # self.sdp.cost_elec = cost_elec
         # self.sdp.para_T = temp
 
     def _subproblem(self, opt, t, sc, st_now):
@@ -321,7 +321,7 @@ class SDP_Model(object):
                     system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
                     system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
 
-    def solve_sdp(self, markov_demands, markov_prob, data_cost, solver_info=None, verbosity=0):
+    def solve_sdp(self, markov_demands, markov_prob, solver_info=None, verbosity=0):
         """:param
         stream_solver = False  # True prints solver output to screen
         keepfiles = False  # True prints intermediate file names (.nl,.sol,...)
@@ -347,12 +347,12 @@ class SDP_Model(object):
             for st_now in itertools.product(*self.sdp.storages):
                 self._assign_state(st_now, 'now')
                 for sc in range(self.scen_number):
-                    self._stage_scen_para(markov_demands[t][sc],  data_cost[1][t + 1])
+                    self._stage_scen_para(markov_demands[t][sc])
                     self._subproblem(opt, t, sc, st_now)
             end = time.time()
             print('  The used time for one time step is: {0:.2}'.format(end - start))
         self._assign_state([], 'first')
-        self._stage_scen_para(markov_demands[0][0], data_cost[1][1])
+        self._stage_scen_para(markov_demands[0][0])
         self._subproblem(opt, 0, 0, st_now)
         end0 = time.time()
         state_iter = len(list(itertools.product(*self.sdp.storages)))

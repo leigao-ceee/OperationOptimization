@@ -16,20 +16,20 @@ def main(filename):
     infile_transition = open('sampling/markov_transition', 'rb')
     markov_transition = pickle.load(infile_transition)
     infile_transition.close()
-    df_EP = pd.read_excel('sampling/cchp_data.xlsx', sheet_name='electricity_price', header=0, index_col=0)
+    # df_EP = pd.read_excel('sampling/cchp_data.xlsx', sheet_name='electricity_price', header=0, index_col=0)
     # df_Temp = pd.read_excel('sampling/chp_data.xlsx', sheet_name='temperature', header=0, index_col=0)
     # Creat model
     cchp_sdp = SDP_Model()
     cchp_sdp.set_para_var()
     cchp_sdp.create_model()
-    st_now, time_average = cchp_sdp.solve_sdp(markov_states, markov_transition, df_EP, verbosity=0)
+    st_now, time_average = cchp_sdp.solve_sdp(markov_states, markov_transition, verbosity=0)
     # Record results
     record_cache(filename + '_detailed', cchp_sdp)
     record_performance(filename + '_overall', cchp_sdp, st_now, time_average)
 
 
 if __name__ == '__main__':
-    main('24hr_2h0e0c')
+    main('24hr_4h0e0c')
     # infile_cache = open('result/24hr_10h0e0c_detailed_cache', 'rb')
     # cache_detailed = pickle.load(infile_cache)
     # infile_cache.close()
