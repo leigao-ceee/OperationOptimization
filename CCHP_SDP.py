@@ -89,7 +89,7 @@ class SDP_Model(object):
 
     def add_subsystem(self, subsystem=None):
         if not subsystem:
-            # turbine: cy zheng, 2014
+            # turbine: cy zheng, 2014； the capacity of turbien means the input fuel to turbine
             self.f2e.append(ThermalSystem(name='turbine', idx=0, capacity=2000., ramp=[0.2, 1.],
                                           pdata=[0.1283, -0.6592, 0.7945, 0.003],
                                           qdata=[-0.7098, 1.5206, -1.1191, 0.835]))
@@ -298,9 +298,9 @@ class SDP_Model(object):
             print('Something wrong')
 
     def _stage_scen_para(self, demands):
-        self.sdp.heat_demand = demands[0]
-        self.sdp.cool_demand = demands[1]
-        self.sdp.elec_demand = demands[2]
+        self.sdp.elec_demand = demands[0]
+        self.sdp.heat_demand = demands[1]
+        self.sdp.cool_demand = demands[2]
         # self.sdp.cost_elec = cost_elec
         # self.sdp.para_T = temp
 
