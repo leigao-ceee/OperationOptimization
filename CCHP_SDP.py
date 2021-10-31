@@ -10,140 +10,28 @@ import time
 from math import inf
 
 
-class ThermalSystem(object):
-    instances = []
-
-    def __init__(self, name=None, idx=0, capacity=None, ramp=None, pdata=None, qdata=None):
-        """
-        :param
-        pdata: system performance data list six parameters ax^2+by^2+cxy+dx+ey+f
-
-        """
-        self.__class__.instances.append(self)
-        self.name = name
-        self.idx = idx
-        self.capacity = capacity
-        self.ramp = ramp
-        self.pdata = pdata
-        self.qdata = qdata
-        self.cache_beta = None
-        self.cache_alpha = None
-
-    def generate_cache(self, stage, storages, scen):
-        self.cache_beta = np.zeros([stage, scen])
-        self.cache_alpha = np.zeros([stage, scen])
-        for i in range(len(storages)):
-            self.cache_beta = np.expand_dims(self.cache_beta, axis=-1)
-            self.cache_beta = np.repeat(self.cache_beta, len(storages[i]), axis=-1)
-            self.cache_alpha = np.expand_dims(self.cache_alpha, axis=-1)
-            self.cache_alpha = np.repeat(self.cache_alpha, len(storages[i]), axis=-1)
-
-
-class StorageSystem(object):
-    instances = []
-
-    def __init__(self, name=None, idx=0, capacity=None, pdata=None, ramp=None):
-        """
-        :param
-        pdata: system performance data list six parameters ax^2+by^2+cxy+dx+ey+f
-
-        """
-        self.__class__.instances.append(self)
-        self.name = name
-        self.idx = idx
-        self.capacity = capacity
-        self.ramp = ramp
-        self.pdata = pdata
-        self.state = list(range(ramp))
-        self.cache_state = None
-
-    def generate_cache(self, stage, storages, scen):
-        self.cache_state = np.zeros([stage, scen])
-        for i in range(len(storages)):
-            self.cache_state = np.expand_dims(self.cache_state, axis=-1)
-            self.cache_state = np.repeat(self.cache_state, len(storages[i]), axis=-1)
-
-
 class SDP_Model(object):
     def __init__(self):
         # energy flow type: f2e(fuel to electricity), h2e; f2h, e2h, h2h; e2c, h2c
         self.sdp = pyo.ConcreteModel()
-        self.f2e = []
-        self.h2e = []
-        self.f2h = []
-        self.h2h = []
-        self.e2h = []
-        self.h2c = []
-        self.e2c = []
-        self.s2h = []
-        self.s2e = []
-        self.s2c = []
-        self.conv_system = []
-        self.strg_system = []
-        self.fuel_system = []
-        self.wast_system = []
-        self.elec_out = []
-        self.heat_out = []
-        self.cool_out = []
-        self.add_subsystem()
 
-    def add_subsystem(self, subsystem=None):
-        if not subsystem:
-            # turbine: cy zheng, 2014； the capacity of turbien means the input fuel to turbine
-            self.f2e.append(ThermalSystem(name='turbine', idx=0, capacity=2000., ramp=[0.2, 1.],
-                                          pdata=[0.1283, -0.6592, 0.7945, 0.003],
-                                          qdata=[-0.7098, 1.5206, -1.1191, 0.835]))
-            # ORC: Xuan Wang, 2016
-            self.h2e.append(ThermalSystem(name='rankine', idx=0, capacity=1500., ramp=[0.1, 1.],
-                                          pdata=[.31788, -.75303, .66103, -.09595]))
-            # https://jmpcoblog.com/hvac-blog/energy-efficient-hot-water-boiler-plant-design-part-2-golden-rules-of-condensing-boiler-technology
-            self.f2h.append(ThermalSystem(name='boiler', idx=0, capacity=800., ramp=[0.1, 1.],
-                                          pdata=[1.5819, -3.2913, 2.3124, .23454]))
-            # self.h2h.append(ThermalSystem(name='absorb', idx=0, capacity=5., ramp=[0.1, 1.],
-            #                               pdata=[0, 0, 0, 0, -0.001357, 0.161708]))
-            self.e2h.append(ThermalSystem(name='heater', idx=0, capacity=800., ramp=[0.1, 1.],
-                                          pdata=[0, 0, 0, 0.95]))
-            # ABC: cy zheng, 2014
-            self.h2c.append(ThermalSystem(name='absorb', idx=0, capacity=1000., ramp=[0.1, 1.],
-                                          pdata=[0, -0.6181, 0.8669, 0.4724]))
-            # cao tao phd theis [149]
-            self.e2c.append(ThermalSystem(name='vcc', idx=0, capacity=1000., ramp=[0.1, 1.],
-                                          pdata=[7.6816, -16.0917, 11.4564, 1.0403]))
-            self.s2h.append(StorageSystem(name='storage_h', idx=0, capacity=1000., ramp=4,
-                                          pdata=[0, 0]))
-            # self.s2e.append(StorageSystem(name='storage_e', idx=0, capacity=1000., ramp=10,
-            #                               pdata=[0, 0]))
-            # self.s2c.append(StorageSystem(name='storage_c', idx=0, capacity=500., ramp=1,
-            #                               pdata=[0, 0]))
-        else:
-            pass
-        # self.conv_system = self.f2e + self.h2e + self.f2h + self.h2h + self.e2h + self.h2c + self.e2c
-        self.conv_system = self.f2e + self.h2e + self.f2h + self.e2h + self.h2c + self.e2c
-        self.strg_system = self.s2h + self.s2e + self.s2c
-        self.fuel_system = self.f2e + self.f2h
-        self.wast_system = self.h2e + self.h2h
-        # self.heat_out = self.f2h + self.h2h + self.e2h
-        self.heat_out = self.f2h + self.e2h
-        self.cool_out = self.h2c + self.e2c
-        self.elec_out = self.f2e + self.h2e
-
-    def set_para_var(self):
+    def set_para_var(self, cchp):
         # SET DECLARATION
         # ## subsystems index
-        _all_sys_name = [ss.name for ss in self.conv_system] + [ss.name for ss in self.strg_system]
+        _all_sys_name = [ss.name for ss in cchp.conv_system] + [ss.name for ss in cchp.strg_system]
         self.sdp.all_systems = pyo.Set(initialize=_all_sys_name)
-        self.sdp.conv_systems = pyo.Set(initialize=[ss.name for ss in self.conv_system])
-        self.sdp.strg_systems = pyo.Set(initialize=[ss.name for ss in self.strg_system])
-        self.sdp.grid_systems = pyo.Set(initialize=[ss.name for ss in self.e2h])
-        self.sdp.fuel_systems = pyo.Set(initialize=[ss.name for ss in self.fuel_system])
-        self.sdp.wast_systems = pyo.Set(initialize=[ss.name for ss in self.wast_system])
-        self.sdp.heat_out = pyo.Set(initialize=[ss.name for ss in self.heat_out])
-        self.sdp.cool_out = pyo.Set(initialize=[ss.name for ss in self.cool_out])
-        self.sdp.elec_out = pyo.Set(initialize=[ss.name for ss in self.elec_out])
-        self.sdp.heat_strg = pyo.Set(initialize=[ss.name for ss in self.s2h])
-        self.sdp.cool_strg = pyo.Set(initialize=[ss.name for ss in self.s2c])
-        self.sdp.elec_strg = pyo.Set(initialize=[ss.name for ss in self.s2e])
-        self.sdp.PM_systems = pyo.Set(initialize=[ss.name for ss in self.f2e])
+        self.sdp.conv_systems = pyo.Set(initialize=[ss.name for ss in cchp.conv_system])
+        self.sdp.strg_systems = pyo.Set(initialize=[ss.name for ss in cchp.strg_system])
+        self.sdp.grid_systems = pyo.Set(initialize=[ss.name for ss in cchp.e2h])
+        self.sdp.fuel_systems = pyo.Set(initialize=[ss.name for ss in cchp.fuel_system])
+        self.sdp.wast_systems = pyo.Set(initialize=[ss.name for ss in cchp.wast_system])
+        self.sdp.heat_out = pyo.Set(initialize=[ss.name for ss in cchp.heat_out])
+        self.sdp.cool_out = pyo.Set(initialize=[ss.name for ss in cchp.cool_out])
+        self.sdp.elec_out = pyo.Set(initialize=[ss.name for ss in cchp.elec_out])
+        self.sdp.heat_strg = pyo.Set(initialize=[ss.name for ss in cchp.s2h])
+        self.sdp.cool_strg = pyo.Set(initialize=[ss.name for ss in cchp.s2c])
+        self.sdp.elec_strg = pyo.Set(initialize=[ss.name for ss in cchp.s2e])
+        self.sdp.PM_systems = pyo.Set(initialize=[ss.name for ss in cchp.f2e])
         # PARAMETER DECLARATION
         # ## efficiency
         self.sdp.para_eff = pyo.Param(self.sdp.conv_systems, pyo.RangeSet(0, 3), initialize=0., mutable=True)
@@ -167,15 +55,15 @@ class SDP_Model(object):
         self.sdp.cost_fuel = pyo.Param(initialize=6.389e-6, mutable=True)  # fuel unit price ($/kJ)
         self.sdp.cost_elec = pyo.Param(initialize=11.21, mutable=True)  # electricity unit price (c/kJ)
         # ## set conversion and storage systems efficiency correlation and capacity
-        for system in self.conv_system:
+        for system in cchp.conv_system:
             self.sdp.para_cp[system.name] = system.capacity
             self.sdp.para_ramp_l[system.name] = system.ramp[0]
             self.sdp.para_ramp_u[system.name] = system.ramp[1]
             for i in range(4):
                 self.sdp.para_eff[system.name, i] = system.pdata[i]
-                if system.name in [ss.name for ss in self.f2e]:
+                if system.name in [ss.name for ss in cchp.f2e]:
                     self.sdp.para_waste[system.name, i] = system.qdata[i]
-        for system in self.strg_system:
+        for system in cchp.strg_system:
             self.sdp.para_cp[system.name] = system.capacity
             self.sdp.para_strg_u[system.name] = system.ramp
             for i in range(2):
@@ -304,7 +192,7 @@ class SDP_Model(object):
         # self.sdp.cost_elec = cost_elec
         # self.sdp.para_T = temp
 
-    def _subproblem(self, opt, t, sc, st_now):
+    def _subproblem(self, opt, t, sc, st_now, strg_system, conv_system):
         cost_now = +inf
         for st_next in itertools.product(*self.sdp.storages):
             self._assign_state(st_next, 'next')
@@ -315,13 +203,13 @@ class SDP_Model(object):
             if cost_temp <= cost_now:
                 cost_now = cost_temp
                 self.sdp.cost[t, sc][st_now] = cost_temp
-                for idx, system in enumerate(self.strg_system):
+                for idx, system in enumerate(strg_system):
                     system.cache_state[t, sc][st_now] = st_next[idx]
-                for system in self.conv_system:
+                for system in conv_system:
                     system.cache_beta[t, sc][st_now] = pyo.value(self.sdp.beta[system.name])
                     system.cache_alpha[t, sc][st_now] = pyo.value(self.sdp.alpha[system.name])
 
-    def solve_sdp(self, markov_demands, markov_prob, solver_info=None, verbosity=0):
+    def solve_sdp(self, cchp, markov_demands, markov_prob, solver_info=None, verbosity=0):
         """:param
         stream_solver = False  # True prints solver output to screen
         keepfiles = False  # True prints intermediate file names (.nl,.sol,...)
@@ -331,14 +219,14 @@ class SDP_Model(object):
         opt = pyo.SolverFactory(solver_info['solver'], solver_io=solver_info['solver_io'])
         self.stage_number = len(markov_demands)
         self.scen_number = len(markov_demands[-1])
-        self.sdp.storages = [strg.state for strg in self.strg_system]
+        self.sdp.storages = [strg.state for strg in cchp.strg_system]
         self.sdp.cost = np.zeros([self.stage_number + 1, self.scen_number])
         for i in range(len(self.sdp.storages)):
             self.sdp.cost = np.expand_dims(self.sdp.cost, axis=-1)
             self.sdp.cost = np.repeat(self.sdp.cost, len(self.sdp.storages[i]), axis=-1)
         markov_prob.append(np.ones([self.scen_number, self.scen_number]))
         self.markov_prob = markov_prob
-        for system in self.strg_system + self.conv_system:
+        for system in cchp.strg_system + cchp.conv_system:
             system.generate_cache(self.stage_number, self.sdp.storages, self.scen_number)
         start0 = time.time()
         for t in range(self.stage_number - 1, 0, -1):
@@ -348,12 +236,12 @@ class SDP_Model(object):
                 self._assign_state(st_now, 'now')
                 for sc in range(self.scen_number):
                     self._stage_scen_para(markov_demands[t][sc])
-                    self._subproblem(opt, t, sc, st_now)
+                    self._subproblem(opt, t, sc, st_now, cchp.strg_system, cchp.conv_system)
             end = time.time()
             print('  The used time for one time step is: {0:.2}'.format(end - start))
         self._assign_state([], 'first')
         self._stage_scen_para(markov_demands[0][0])
-        self._subproblem(opt, 0, 0, st_now)
+        self._subproblem(opt, 0, 0, st_now, cchp.strg_system, cchp.conv_system)
         end0 = time.time()
         state_iter = len(list(itertools.product(*self.sdp.storages)))
         time_average = (end0 - start0)/((self.stage_number-1)*self.scen_number*state_iter**2)
